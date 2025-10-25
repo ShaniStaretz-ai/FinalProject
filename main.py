@@ -48,7 +48,7 @@ async def create_model(request: Request):
         logger.info(f"start create model")
         body = await request.json()
 
-        required = ["csv_file", "feature_cols", "label_col", "train_percentage", "model_filename", "col_types"]
+        required = ["csv_file", "feature_cols", "label_col", "train_percentage", "model_filename"]
         missing = [k for k in required if k not in body]
         if missing:
             logger.error(f"missing parameters in the body request")
@@ -75,28 +75,19 @@ async def predict_model(request: Request):
       "features": {
         "age": 30,
         "salary": 50000,
-        "city_Chicago": 0,
-        "city_Houston": 1,
-        "city_Los Angeles": 0,
+        "city": "Chicago",
         "hire_date": 1583020800
       }
     }
     """
     try:
-        print(f"start predict_model")
         body = await request.json()
-        print(f"receive body:",body)
         model_filename = body.get("model_filename")
-        print("model_filename:",model_filename)
         features = body.get("features")
-        col_types = body.get("col_types")
-        print(features)
-        if not model_filename or not features or not col_types:
+        if not model_filename or not features:
             raise ValueError("Both 'model_filename' and 'features' are required.")
-
-
         # Predict
-        prediction = predict(model_filename,features,col_types)
+        prediction = predict(model_filename,features)
 
         return {"status": "success", "prediction": prediction}
 
