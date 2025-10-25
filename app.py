@@ -64,7 +64,19 @@ with tabs[0]:
                         response = requests.post(CREATE_URL, json=payload)
                         if response.status_code == 200:
                             st.success("✅ Model trained successfully!")
-                            st.json(response.json())
+                            # Display metrics nicely
+                            data = response.json()
+                            if "metrics" in data:
+                                st.subheader("📊 Model Metrics")
+                                metrics = data["metrics"]
+                                # Use st.metric for each metric
+                                st.metric(label="R² Score", value=f"{metrics.get('r2_score', 0):.4f}")
+                                st.metric(label="Mean Squared Error",
+                                          value=f"{metrics.get('mean_squared_error', 0):.2f}")
+                                st.metric(label="Mean Absolute Error",
+                                          value=f"{metrics.get('mean_absolute_error', 0):.2f}")
+                            else:
+                                st.json(response)  # fallback to full JSON display
                             # Save session state AFTER training success
                             st.session_state.training_completed = True
                             st.session_state.uploaded_df = df
