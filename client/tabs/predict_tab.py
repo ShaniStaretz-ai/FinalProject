@@ -31,13 +31,13 @@ def show_predict_tab(api_predict_url):
                 st.error("⚠️ Please enter the model filename.")
             else:
                 payload = {"model_filename": model_filename, "features": features}
-                st.json(payload)
                 try:
                     response = requests.post(api_predict_url, json=payload)
                     if response.status_code == 200:
                         result = response.json()
                         st.success("✅ Prediction successful!")
-                        st.json(result)
+                        prediction = result.get("prediction")
+                        st.metric("Predicted Value", f"{prediction:.4f}")
                     else:
                         st.error(f"❌ Error: {response.text}")
                 except Exception as e:
