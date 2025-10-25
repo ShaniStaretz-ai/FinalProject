@@ -1,7 +1,10 @@
+# Server
 fastapi
 uvicorn
-joblib
 scikit-learn
 pandas
+joblib
+
+# Client
 streamlit
-matplotlib
+requests

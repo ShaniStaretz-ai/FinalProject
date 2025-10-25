@@ -1,25 +1,45 @@
 import streamlit as st
 import pandas as pd
+import os
 import requests
 
 def show_train_tab(api_create_url):
     st.header("Train a New Model via API")
 
+    # --- File upload ---
     uploaded_file = st.file_uploader("Upload CSV", type="csv")
 
-    # Reset session state if file removed
-    if uploaded_file is None:
+    # --- Handle temporary path in session state ---
+    if "temp_path" not in st.session_state:
+        st.session_state.temp_path = None
+
+    # --- File removed → delete temp file ---
+    if uploaded_file is None and st.session_state.temp_path:
+        if os.path.exists(st.session_state.temp_path):
+            os.remove(st.session_state.temp_path)
+        st.session_state.temp_path = None
         for key in ["training_completed", "uploaded_df", "feature_cols"]:
             if key in st.session_state:
                 del st.session_state[key]
 
+    # --- File uploaded ---
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file)
+            # Save temporarily
+            temp_dir = "temp_uploads"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.session_state.temp_path = temp_path
+
+            # Read CSV
+            df = pd.read_csv(temp_path)
             st.success("✅ File loaded successfully!")
             st.write("### Preview of uploaded data:")
             st.dataframe(df.head())
 
+            # --- Feature & label selection ---
             all_columns = df.columns.tolist()
             feature_cols = st.multiselect("Select feature columns", all_columns, key="feature_cols_widget")
             if len(feature_cols) == len(all_columns):
@@ -32,7 +52,9 @@ def show_train_tab(api_create_url):
             train_percentage = st.slider("Training percentage", 0.1, 0.9, 0.8, 0.05)
             model_filename = st.text_input("Model filename", "linear.pkl")
 
+            # --- Train button ---
             if st.button("Train Model"):
+                # Validation
                 if not feature_cols:
                     st.error("⚠️ Please select at least one feature column.")
                 elif label_col == "-- Select Label Column --":
@@ -41,7 +63,7 @@ def show_train_tab(api_create_url):
                     st.error("⚠️ Please enter a model filename.")
                 else:
                     payload = {
-                        "csv_file": uploaded_file.name,
+                        "csv_file": os.path.abspath(temp_path),  # send full path
                         "feature_cols": feature_cols,
                         "label_col": label_col,
                         "train_percentage": train_percentage,
@@ -53,7 +75,7 @@ def show_train_tab(api_create_url):
                             res = response.json()
                             st.success("✅ Model trained successfully!")
 
-                            # Display metrics
+                            # --- Display metrics ---
                             if "metrics" in res:
                                 st.subheader("📊 Model Metrics")
                                 metrics = res["metrics"]
@@ -66,6 +88,11 @@ def show_train_tab(api_create_url):
                             st.session_state.uploaded_df = df
                             st.session_state.feature_cols = feature_cols
 
+                            # Optional: delete temp file after training
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                                st.session_state.temp_path = None
+
                         else:
                             st.error(f"❌ Error: {response.text}")
                     except Exception as e:
@@ -75,5 +102,6 @@ def show_train_tab(api_create_url):
 
         except Exception as e:
             st.error(f"Error reading CSV: {e}")
+
     else:
         st.info("👆 Upload a CSV file to start training.")

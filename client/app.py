@@ -1,7 +1,4 @@
 import streamlit as st
-import pandas as pd
-import requests
-import matplotlib.pyplot as plt
 from tabs import train_tab, predict_tab
 
 # --- Sidebar: API URL ---

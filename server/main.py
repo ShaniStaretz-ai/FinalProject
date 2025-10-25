@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from fastapi import FastAPI, Request, HTTPException
 
@@ -53,6 +54,11 @@ async def create_model(request: Request):
         if missing:
             logger.error(f"missing parameters in the body request")
             raise ValueError(f"Missing required parameters: {', '.join(missing)}")
+            # CSV file exists check
+
+        if not os.path.exists(body["csv_file"]):
+            raise HTTPException(status_code=400, detail=f"File not found: {body['csv_file']}")
+
 
         metrics = train_linear_regression_model(**body)
         return {"status": "success", "metrics": metrics}
