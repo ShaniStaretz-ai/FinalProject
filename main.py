@@ -47,7 +47,7 @@ async def create_model(request: Request):
     try:
         logger.info(f"start create model")
         body = await request.json()
-
+        print(body)
         required = ["csv_file", "feature_cols", "label_col", "train_percentage", "model_filename"]
         missing = [k for k in required if k not in body]
         if missing:
