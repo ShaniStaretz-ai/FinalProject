@@ -20,6 +20,12 @@ with tabs[0]:
 
     uploaded_file = st.file_uploader("Upload CSV", type="csv")
 
+    # --- Handle file reset ---
+    if uploaded_file is None:
+        for key in ["training_completed", "uploaded_df", "feature_cols"]:
+            if key in st.session_state:
+                del st.session_state[key]
+
     if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file)
@@ -63,24 +69,24 @@ with tabs[0]:
                     try:
                         response = requests.post(CREATE_URL, json=payload)
                         if response.status_code == 200:
+                            res = response.json()
                             st.success("✅ Model trained successfully!")
+
                             # Display metrics nicely
-                            data = response.json()
-                            if "metrics" in data:
+                            if "metrics" in res:
                                 st.subheader("📊 Model Metrics")
-                                metrics = data["metrics"]
-                                # Use st.metric for each metric
-                                st.metric(label="R² Score", value=f"{metrics.get('r2_score', 0):.4f}")
-                                st.metric(label="Mean Squared Error",
-                                          value=f"{metrics.get('mean_squared_error', 0):.2f}")
-                                st.metric(label="Mean Absolute Error",
-                                          value=f"{metrics.get('mean_absolute_error', 0):.2f}")
+                                metrics = res["metrics"]
+                                st.metric("R² Score", f"{metrics.get('r2_score',0):.4f}")
+                                st.metric("Mean Squared Error", f"{metrics.get('mean_squared_error',0):.2f}")
+                                st.metric("Mean Absolute Error", f"{metrics.get('mean_absolute_error',0):.2f}")
                             else:
-                                st.json(response)  # fallback to full JSON display
+                                st.json(res)
+
                             # Save session state AFTER training success
                             st.session_state.training_completed = True
                             st.session_state.uploaded_df = df
                             st.session_state.feature_cols = feature_cols
+
                         else:
                             st.error(f"❌ Error: {response.text}")
                     except Exception as e:
@@ -107,6 +113,18 @@ with tabs[1]:
         # Optional: preview feature columns
         st.subheader("Feature Columns")
         st.dataframe(df[feature_cols].head())
+
+        # Visualization (numeric features only)
+        numeric_cols = df[feature_cols].select_dtypes(include=["number"]).columns.tolist()
+        if numeric_cols:
+            st.subheader("📊 Feature Data Visualization")
+            selected_chart_col = st.selectbox("Select numeric column to visualize", numeric_cols)
+            fig, ax = plt.subplots()
+            ax.plot(df[selected_chart_col].values, marker='o', linestyle='-')
+            ax.set_xlabel("Index")
+            ax.set_ylabel(selected_chart_col)
+            ax.set_title(f"Line plot of {selected_chart_col}")
+            st.pyplot(fig)
 
         # Dynamic input fields for feature columns
         st.subheader("🧠 Input Feature Values")
