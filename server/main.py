@@ -2,33 +2,51 @@ import logging
 import os
 import sys
 from fastapi import FastAPI, Request, HTTPException
+from dotenv import load_dotenv
 
-from linear_regression_model import train_linear_regression_model,predict
+from server.models.linear_regression_model import train_linear_regression_model,predict
+
+# Load environment variables from .env file
+# Load from project root (one level up from server/)
+env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+load_dotenv(dotenv_path=env_path)
+
+# Get log level from environment variable, default to DEBUG
+log_level_str = os.getenv("LOG_LEVEL", "DEBUG").upper()
+log_level = getattr(logging, log_level_str, logging.DEBUG)
 
 # Configure logging to go to stdout immediately
 logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=log_level,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ],
     force=True  # ensures it overwrites existing configs
 )
 
+# Get logger for this module
 logger = logging.getLogger(__name__)
+
+# Also configure uvicorn loggers to show our app logs
+uvicorn_logger = logging.getLogger("uvicorn")
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+uvicorn_error_logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Linear Regression Trainer API",
               description="Train and save models via API",
               version="1.0.0")
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info(f"Incoming request: {request.method} {request.url}")
+    logger.debug(f"Incoming request: {request.method} {request.url}")
     response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
+    logger.debug(f"Response status: {response.status_code}")
     return response
 
 @app.on_event("startup")
 def startup_event():
-    print("App is starting...")
-    logger.info("Logger: App startup event")
+    logger.info(f"App is starting... Log level: {log_level_str}")
+    logger.debug("Logger: App startup event")
 
 
 @app.get("/")
@@ -64,20 +82,20 @@ async def create_model(request: Request):
         return {"status": "success", "metrics": metrics}
 
     except Exception as e:
-        logger.error("error in create model:",str(e))
+        logger.error(f"error in create model: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # -------------------------------
-# /predict → load model and predict
+# /predict/{model_name} → load model and predict
 # -------------------------------
-@app.post("/predict")
-async def predict_model(request: Request):
+@app.post("/predict/{model_name}")
+async def predict_model(model_name: str, request: Request):
     """
     Load a trained model and predict using input features.
+    Path parameter: model_name (e.g., "linear")
     Example body:
     {
-      "model_filename": "linear.pkl",
       "features": {
         "age": 30,
         "salary": 50000,
@@ -87,17 +105,26 @@ async def predict_model(request: Request):
     }
     """
     try:
+        logger.info(f"Predict request received for model: {model_name}")
         body = await request.json()
-        model_filename = body.get("model_filename")
         features = body.get("features")
-        if not model_filename or not features:
-            raise ValueError("Both 'model_filename' and 'features' are required.")
+        if not features:
+            logger.error("Missing 'features' in request body")
+            raise ValueError("'features' is required in the request body.")
+        
+        # Convert model_name to model_filename (add .pkl extension)
+        model_filename = f"{model_name}.pkl"
+        logger.info(f"Loading model: {model_filename}")
+        
         # Predict
-        prediction = predict(model_filename,features)
+        prediction = predict(model_filename, features)
+        logger.info(f"Prediction successful: {prediction}")
 
         return {"status": "success", "prediction": prediction}
 
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Model file not found.")
+    except FileNotFoundError as e:
+        logger.error(f"Model file not found: {model_filename}")
+        raise HTTPException(status_code=404, detail=f"Model file not found: {model_filename}")
     except Exception as e:
+        logger.error(f"Error in predict_model: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))

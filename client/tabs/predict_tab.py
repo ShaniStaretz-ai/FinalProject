@@ -24,23 +24,28 @@ def show_predict_tab(api_predict_url):
                 val = st.selectbox(f"{col}", options)
             features[col] = val
 
-        model_filename = st.text_input("Enter model filename", "linear.pkl")
+        # Get model name from session state (saved during training)
+        if "model_name" in st.session_state:
+            model_name = st.session_state.model_name
+            st.info(f"📦 Using model: **{model_name}**")
+        else:
+            # Fallback to "linear" if no model name is saved
+            model_name = "linear"
+            st.warning("⚠️ No model name found. Using default: **linear**")
 
         if st.button("Predict"):
-            if not model_filename.strip():
-                st.error("⚠️ Please enter the model filename.")
-            else:
-                payload = {"model_filename": model_filename, "features": features}
-                try:
-                    response = requests.post(api_predict_url, json=payload)
-                    if response.status_code == 200:
-                        result = response.json()
-                        st.success("✅ Prediction successful!")
-                        prediction = result.get("prediction")
-                        st.metric("Predicted Value", f"{prediction:.4f}")
-                    else:
-                        st.error(f"❌ Error: {response.text}")
-                except Exception as e:
-                    st.error(f"❌ Request failed: {e}")
+            payload = {"features": features}
+            try:
+                api_predict_url = f"{api_predict_url}/{model_name}"
+                response = requests.post(api_predict_url, json=payload)
+                if response.status_code == 200:
+                    result = response.json()
+                    st.success("✅ Prediction successful!")
+                    prediction = result.get("prediction")
+                    st.metric("Predicted Value", f"{prediction:.4f}")
+                else:
+                    st.error(f"❌ Error: {response.text}")
+            except Exception as e:
+                st.error(f"❌ Request failed: {e}")
     else:
         st.warning("⚠️ Complete model training first in the **Train Model** tab.")

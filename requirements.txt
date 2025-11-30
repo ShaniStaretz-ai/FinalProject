@@ -4,6 +4,7 @@ uvicorn
 scikit-learn
 pandas
 joblib
+python-dotenv
 
 # Client
 streamlit

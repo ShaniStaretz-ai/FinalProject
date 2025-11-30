@@ -87,6 +87,9 @@ def show_train_tab(api_create_url):
                             st.session_state.training_completed = True
                             st.session_state.uploaded_df = df
                             st.session_state.feature_cols = feature_cols
+                            # Extract model name from filename (remove .pkl extension if present)
+                            model_name = model_filename.replace(".pkl", "") if model_filename.endswith(".pkl") else model_filename
+                            st.session_state.model_name = model_name
 
                             # Optional: delete temp file after training
                             if os.path.exists(temp_path):

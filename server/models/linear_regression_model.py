@@ -92,7 +92,7 @@ def predict(model_filename: str, features: dict) -> float:
 # 4️⃣ Example usage
 # -----------------------------
 if __name__ == "__main__":
-    csv_file = "../employees.csv"
+    csv_file = "../../employees.csv"
     feature_cols = ["age", "salary", "city", "hire_date"]  # city is string
     label_col = "bonus"
 
