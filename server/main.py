@@ -28,11 +28,6 @@ logging.basicConfig(
 # Get logger for this module
 logger = logging.getLogger(__name__)
 
-# Also configure uvicorn loggers to show our app logs
-uvicorn_logger = logging.getLogger("uvicorn")
-uvicorn_access_logger = logging.getLogger("uvicorn.access")
-uvicorn_error_logger = logging.getLogger("uvicorn.error")
-
 app = FastAPI(title="Linear Regression Trainer API",
               description="Train and save models via API",
               version="1.0.0")
@@ -51,7 +46,6 @@ def startup_event():
 
 @app.get("/")
 def home():
-    print("Endpoint '/' called",flush=True)  # May not always appear with --reload
     logger.info("Endpoint '/' called")
     return {"message": "Trainer API is running!"}
 
@@ -64,9 +58,9 @@ async def create_model(request: Request):
     Train a Linear Regression model using parameters in JSON body.
     """
     try:
-        logger.info(f"start create model")
+        logger.info("Start create model")
         body = await request.json()
-        print(body)
+        logger.debug(f"Request body: {body}")
         required = ["csv_file", "feature_cols", "label_col", "train_percentage", "model_filename"]
         missing = [k for k in required if k not in body]
         if missing:
@@ -74,6 +68,13 @@ async def create_model(request: Request):
             raise ValueError(f"Missing required parameters: {', '.join(missing)}")
             # CSV file exists check
 
+        # Validate model_filename to prevent path traversal
+        model_filename = body.get("model_filename", "")
+        if not isinstance(model_filename, str) or not model_filename:
+            raise HTTPException(status_code=400, detail="Invalid model filename: must be a non-empty string")
+        if "/" in model_filename or "\\" in model_filename or ".." in model_filename:
+            raise HTTPException(status_code=400, detail="Invalid model filename: contains invalid characters")
+        
         if not os.path.exists(body["csv_file"]):
             raise HTTPException(status_code=400, detail=f"File not found: {body['csv_file']}")
 
@@ -104,6 +105,13 @@ async def predict_model(model_name: str, request: Request):
       }
     }
     """
+    # Validate model_name to prevent path traversal
+    if not isinstance(model_name, str) or not model_name:
+        raise HTTPException(status_code=400, detail="Invalid model name: must be a non-empty string")
+    if "/" in model_name or "\\" in model_name or ".." in model_name:
+        raise HTTPException(status_code=400, detail="Invalid model name: contains invalid characters")
+    
+    model_filename = None
     try:
         logger.info(f"Predict request received for model: {model_name}")
         body = await request.json()
@@ -125,6 +133,9 @@ async def predict_model(model_name: str, request: Request):
     except FileNotFoundError as e:
         logger.error(f"Model file not found: {model_filename}")
         raise HTTPException(status_code=404, detail=f"Model file not found: {model_filename}")
+    except ValueError as e:
+        logger.error(f"Validation error in predict_model: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error in predict_model: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))

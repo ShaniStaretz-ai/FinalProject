@@ -36,8 +36,9 @@ def show_predict_tab(api_predict_url):
         if st.button("Predict"):
             payload = {"features": features}
             try:
-                api_predict_url = f"{api_predict_url}/{model_name}"
-                response = requests.post(api_predict_url, json=payload)
+                # Construct the full prediction URL
+                full_predict_url = f"{api_predict_url}/{model_name}"
+                response = requests.post(full_predict_url, json=payload, timeout=30)
                 if response.status_code == 200:
                     result = response.json()
                     st.success("✅ Prediction successful!")

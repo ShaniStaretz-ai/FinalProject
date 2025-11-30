@@ -1,4 +1,5 @@
 import json
+import os
 
 import pandas as pd
 import joblib
@@ -29,15 +30,32 @@ def train_linear_regression_model(
     train_percentage: float,
     model_filename: str
 ):
+    # Validate inputs
+    if not (0 < train_percentage < 1):
+        raise ValueError("train_percentage must be between 0 and 1")
+    
+    if not feature_cols:
+        raise ValueError("feature_cols cannot be empty")
+    
     df = pd.read_csv(csv_file)
+    if df.empty:
+        raise ValueError("CSV file is empty")
+    
     df = preprocess_dates(df)
+    
+    # Validate columns exist
+    missing_features = [col for col in feature_cols if col not in df.columns]
+    if missing_features:
+        raise ValueError(f"Feature columns not found in CSV: {missing_features}")
+    
+    if label_col not in df.columns:
+        raise ValueError(f"Label column '{label_col}' not found in CSV")
 
     X = df[feature_cols]
     y = df[label_col]
 
-    # Identify string and numeric columns
+    # Identify string columns for one-hot encoding
     string_cols = X.select_dtypes(include=['object']).columns.tolist()
-    numeric_cols = X.select_dtypes(include=['int64','float64']).columns.tolist()
 
     # Preprocessing pipeline
     preprocessor = ColumnTransformer(
@@ -66,11 +84,10 @@ def train_linear_regression_model(
         "mean_squared_error": mean_squared_error(y_test, y_pred),
         "mean_absolute_error": mean_absolute_error(y_test, y_pred)
     }
+    # Save model
     joblib.dump(pipeline, model_filename)
     print(f"Model saved to: {model_filename}")
-
-    joblib.dump(pipeline, model_filename)
-    print(f"Model saved to: {model_filename}")
+    
     # Save metrics
     metrics_filename = model_filename.replace(".pkl", "_metrics.json")
     with open(metrics_filename, "w") as f:
@@ -83,6 +100,12 @@ def train_linear_regression_model(
 # 3️⃣ Predict function
 # -----------------------------
 def predict(model_filename: str, features: dict) -> float:
+    if not os.path.exists(model_filename):
+        raise FileNotFoundError(f"Model file not found: {model_filename}")
+    
+    if not features:
+        raise ValueError("Features dictionary cannot be empty")
+    
     pipeline = joblib.load(model_filename)
     x_input = pd.DataFrame([features])
     pred = pipeline.predict(x_input)

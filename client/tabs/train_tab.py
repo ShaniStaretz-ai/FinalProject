@@ -18,7 +18,7 @@ def show_train_tab(api_create_url):
         if os.path.exists(st.session_state.temp_path):
             os.remove(st.session_state.temp_path)
         st.session_state.temp_path = None
-        for key in ["training_completed", "uploaded_df", "feature_cols"]:
+        for key in ["training_completed", "uploaded_df", "feature_cols", "model_name"]:
             if key in st.session_state:
                 del st.session_state[key]
 
