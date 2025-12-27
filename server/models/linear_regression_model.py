@@ -1,6 +1,5 @@
 import json
 import os
-
 import pandas as pd
 import joblib
 from sklearn.compose import ColumnTransformer
@@ -10,15 +9,29 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
+
+# ------------------------------------------------
+# Paths
+# ------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # server/models
+
+TRAIN_MODELS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "train_models"))
+METRICS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "metrics"))
+
+os.makedirs(TRAIN_MODELS_DIR, exist_ok=True)
+os.makedirs(METRICS_DIR, exist_ok=True)
+
+
 # -----------------------------
 # 1️⃣ Preprocess dates
 # -----------------------------
 def preprocess_dates(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.columns:
         if "date" in col:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
+            df[col] = pd.to_datetime(df[col], errors="coerce")
             df[col] = df[col].map(lambda x: x.timestamp() if pd.notnull(x) else 0)
     return df
+
 
 # -----------------------------
 # 2️⃣ Train function
@@ -30,103 +43,88 @@ def train_linear_regression_model(
     train_percentage: float,
     model_filename: str
 ):
-    # Validate inputs
     if not (0 < train_percentage < 1):
         raise ValueError("train_percentage must be between 0 and 1")
-    
+
     if not feature_cols:
         raise ValueError("feature_cols cannot be empty")
-    
+
     df = pd.read_csv(csv_file)
     if df.empty:
         raise ValueError("CSV file is empty")
-    
+
     df = preprocess_dates(df)
-    
-    # Validate columns exist
+
     missing_features = [col for col in feature_cols if col not in df.columns]
     if missing_features:
         raise ValueError(f"Feature columns not found in CSV: {missing_features}")
-    
+
     if label_col not in df.columns:
         raise ValueError(f"Label column '{label_col}' not found in CSV")
 
     X = df[feature_cols]
     y = df[label_col]
 
-    # Identify string columns for one-hot encoding
-    string_cols = X.select_dtypes(include=['object']).columns.tolist()
+    string_cols = X.select_dtypes(include=["object"]).columns.tolist()
 
-    # Preprocessing pipeline
     preprocessor = ColumnTransformer(
         transformers=[
-            ('cat', OneHotEncoder(drop='first'), string_cols),
+            ("cat", OneHotEncoder(drop="first"), string_cols),
         ],
-        remainder='passthrough'  # keep numeric columns as-is
+        remainder="passthrough",
     )
 
-    # Full pipeline with model
     pipeline = Pipeline([
-        ('preprocessor', preprocessor),
-        ('regressor', LinearRegression())
+        ("preprocessor", preprocessor),
+        ("regressor", LinearRegression()),
     ])
 
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=train_percentage, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, train_size=train_percentage, random_state=42
+    )
 
-    # Fit pipeline
     pipeline.fit(X_train, y_train)
 
-    # Predict & evaluate
     y_pred = pipeline.predict(X_test)
+
     metrics = {
         "r2_score": r2_score(y_test, y_pred),
         "mean_squared_error": mean_squared_error(y_test, y_pred),
-        "mean_absolute_error": mean_absolute_error(y_test, y_pred)
+        "mean_absolute_error": mean_absolute_error(y_test, y_pred),
     }
-    # Save model
-    joblib.dump(pipeline, model_filename)
-    print(f"Model saved to: {model_filename}")
-    
-    # Save metrics
-    metrics_filename = model_filename.replace(".pkl", "_metrics.json")
-    with open(metrics_filename, "w") as f:
+
+    # ---------- Save model ----------
+    model_path = os.path.join(TRAIN_MODELS_DIR, model_filename)
+    joblib.dump(pipeline, model_path)
+
+    # ---------- Save metrics ----------
+    metrics_path = os.path.join(
+        METRICS_DIR,
+        model_filename.replace(".pkl", "_metrics.json")
+    )
+
+    with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=4)
-    print(f"Metrics saved to: {metrics_filename}")
-    print("Metrics:", metrics)
+
+    print(f"Model saved to: {model_path}")
+    print(f"Metrics saved to: {metrics_path}")
+
     return metrics
+
 
 # -----------------------------
 # 3️⃣ Predict function
 # -----------------------------
 def predict(model_filename: str, features: dict) -> float:
-    if not os.path.exists(model_filename):
-        raise FileNotFoundError(f"Model file not found: {model_filename}")
-    
+    model_path = os.path.join(TRAIN_MODELS_DIR, model_filename)
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
     if not features:
         raise ValueError("Features dictionary cannot be empty")
-    
-    pipeline = joblib.load(model_filename)
+
+    pipeline = joblib.load(model_path)
     x_input = pd.DataFrame([features])
-    pred = pipeline.predict(x_input)
-    return float(pred[0])
 
-# -----------------------------
-# 4️⃣ Example usage
-# -----------------------------
-if __name__ == "__main__":
-    csv_file = "../../employees.csv"
-    feature_cols = ["age", "salary", "city", "hire_date"]  # city is string
-    label_col = "bonus"
-
-    # Train
-    train_linear_regression_model(csv_file, feature_cols, label_col, 0.8, "linear_model.pkl")
-
-    # Predict
-    new_employee = {
-        "age": 30,
-        "salary": 50000,
-        "city": "Chicago",
-        "hire_date": 1583020800  # already numeric
-    }
-    print("Prediction:", predict("linear_model.pkl", new_employee))
+    return float(pipeline.predict(x_input)[0])
