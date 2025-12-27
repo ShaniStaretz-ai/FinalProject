@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 import json
 from fastapi import FastAPI, HTTPException, Request,UploadFile, File, Form
+from sklearn.utils._param_validation import InvalidParameterError
+
 from server.config import TRAIN_MODELS_DIR
 from server.models.model_classes import MODEL_CLASSES
 from server.models.base_trainer import BaseTrainer
@@ -49,54 +51,79 @@ async def get_trained_models():
 from typing import Optional
 @app.post("/create")
 async def create_model(
-        model_type: str = Form(...),
-        feature_cols: str = Form(...),
-        label_col: str = Form(...),
-        train_percentage: float = Form(0.8),
-        csv_file: Optional[UploadFile] = File(None),
-        optional_params: str = Form("{}")
+    model_type: str = Form(...),
+    feature_cols: str = Form(...),
+    label_col: str = Form(...),
+    train_percentage: float = Form(0.8),
+    csv_file: Optional[UploadFile] = File(None),
+    optional_params: str = Form("{}")
 ):
+    print("=== /create called ===")
     if csv_file is None:
+        print("No CSV file provided")
         raise HTTPException(status_code=400, detail="CSV file missing")
 
-    # Read the uploaded file content into memory
+    # Read the uploaded file
     try:
         contents = await csv_file.read()  # async read
-        csv_file.file.seek(0)  # reset pointer
+        print(f"Raw file size (bytes): {len(contents)}")
+
         if not contents:
+            print("CSV file is empty after read()")
             raise HTTPException(status_code=400, detail="CSV file is empty")
+
+        # Reset file pointer in case of future reads
+        csv_file.file.seek(0)
 
         # Decode bytes to string if necessary
         if isinstance(contents, bytes):
             contents = contents.decode("utf-8")
 
+        # Load CSV into DataFrame
         df = pd.read_csv(StringIO(contents))
+        print(f"CSV loaded successfully: {df.shape[0]} rows, {df.shape[1]} columns")
     except pd.errors.EmptyDataError:
+        print("EmptyDataError: CSV file has no data")
         raise HTTPException(status_code=400, detail="CSV file is empty")
     except Exception as e:
+        print(f"Exception reading CSV: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
 
-    # Parse JSON strings
+    # Parse JSON from client
     try:
         feature_cols = json.loads(feature_cols)
         optional_params = json.loads(optional_params)
+        print(f"Feature columns: {feature_cols}")
+        print(f"Optional parameters: {optional_params}")
     except json.JSONDecodeError:
+        print("Invalid JSON in feature_cols or optional_params")
         raise HTTPException(status_code=400, detail="Invalid JSON in feature_cols or optional_params")
 
-    # Validate columns
+    # Validate feature and label columns
     missing_cols = [c for c in feature_cols + [label_col] if c not in df.columns]
     if missing_cols:
+        print(f"Columns missing in CSV: {missing_cols}")
         raise HTTPException(status_code=400, detail=f"Columns not found in CSV: {missing_cols}")
 
-    # Initialize trainer
+    # Validate model type
     if model_type not in MODEL_CLASSES:
+        print(f"Model type '{model_type}' not recognized")
         raise HTTPException(status_code=400, detail=f"Model type '{model_type}' not recognized")
 
+    # Initialize and train model
     trainer_class = MODEL_CLASSES[model_type]
-    trainer = trainer_class(**optional_params)
-
-    # Train
-    metrics = trainer.train(df, feature_cols, label_col, train_percentage)
+    try:
+        print("Initializing trainer...")
+        trainer = trainer_class(**optional_params)
+        print("Training model...")
+        metrics = trainer.train(df, feature_cols, label_col, train_percentage)
+        print("Training completed successfully")
+    except InvalidParameterError as e:
+        print(f"InvalidParameterError: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid model parameter: {e}")
+    except Exception as e:
+        print(f"Unexpected training error: {e}")
+        raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
     return {"status": "success", "metrics": metrics}
 
