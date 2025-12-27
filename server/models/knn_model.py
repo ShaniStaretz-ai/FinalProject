@@ -1,16 +1,22 @@
-from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsRegressor
 from server.models.base_trainer import BaseTrainer
 
 
-class LinearRegressionModel(BaseTrainer):
-    def __init__(self):
+class KNNModel(BaseTrainer):
+    def __init__(self, n_neighbors=5, weights="distance"):
         super().__init__(
-            model=LinearRegression(),
-            model_name="linear"
+            model=KNeighborsRegressor(
+                n_neighbors=n_neighbors,
+                weights=weights
+            ),
+            model_name="knn"
         )
 
 if __name__ == "__main__":
-    model = LinearRegressionModel()
+    model = KNNModel(
+        n_neighbors=5,
+        weights="distance"
+    )
 
     metrics = model.train(
         csv_file="../../employees.csv",
