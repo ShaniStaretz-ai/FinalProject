@@ -1,10 +1,9 @@
-from models.linear_regression_model import LinearRegressionModel
-from models.knn_model import KNNModel
+from server.models.knn_model import KNNModel
+from server.models.linear_regression_model import LinearRegressionModel
 
-# Registry: model_name -> class
-MODEL_REGISTRY = {
+MODEL_CLASSES = {
+    "knn": KNNModel,
     "linear": LinearRegressionModel,
-    "knn": KNNModel
 }
 
 def get_model_class(model_name: str):
@@ -12,6 +11,6 @@ def get_model_class(model_name: str):
     Returns the model class for the given model_name.
     Raises KeyError if model not found.
     """
-    if model_name not in MODEL_REGISTRY:
+    if model_name not in MODEL_CLASSES:
         raise KeyError(f"Model '{model_name}' is not registered")
-    return MODEL_REGISTRY[model_name]
+    return MODEL_CLASSES[model_name]

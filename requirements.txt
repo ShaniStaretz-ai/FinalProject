@@ -5,6 +5,7 @@ scikit-learn
 pandas
 joblib
 python-dotenv
+python-multipart
 
 # Client
 streamlit

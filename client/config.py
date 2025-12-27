@@ -1,10 +1,10 @@
-import streamlit as st
-# --- Sidebar: API URL ---
-st.sidebar.header("API Settings")
-# Allow user to override via sidebar input
-API_BASE_URL = st.sidebar.text_input("API Base URL", "http://127.0.0.1:8000")
+# config.py
 
-# Derived URLs
-API_CREATE_URL = f"{API_BASE_URL}/create"
-API_PREDICT_URL = f"{API_BASE_URL}/predict"
-API_MODELS_URL = f"{API_BASE_URL}/models"
+DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
+
+def build_urls(base_url: str):
+    return {
+        "CREATE": f"{base_url}/create",
+        "PREDICT": f"{base_url}/predict",
+        "MODELS": f"{base_url}/models",
+    }

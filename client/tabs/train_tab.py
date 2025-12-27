@@ -1,124 +1,85 @@
 import streamlit as st
-import pandas as pd
-import os
 import requests
+import json
+import pandas as pd
 
-def show_train_tab(api_create_url, api_models_url=None):
-    st.header("Train a New Model via API")
+def show_train_tab(urls):
+    API_CREATE_URL = urls["CREATE"]
+    API_MODELS_URL = urls["MODELS"]
 
-    # --- File upload ---
-    uploaded_file = st.file_uploader("Upload CSV", type="csv")
+    st.header("Train Model")
 
-    if "temp_path" not in st.session_state:
-        st.session_state.temp_path = None
+    # -----------------------------
+    # Upload CSV
+    # -----------------------------
+    uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+    if not uploaded_file:
+        st.info("Please upload a CSV file to continue.")
+        return
 
-    if uploaded_file is None and st.session_state.temp_path:
-        if os.path.exists(st.session_state.temp_path):
-            os.remove(st.session_state.temp_path)
-        st.session_state.temp_path = None
-        for key in ["training_completed", "uploaded_df", "feature_cols", "model_name", "selected_model"]:
-            if key in st.session_state:
-                del st.session_state[key]
+    # Rewind before reading
+    uploaded_file.seek(0)
+    df = pd.read_csv(uploaded_file)
+    st.dataframe(df.head())
+    columns = df.columns.tolist()
 
-    if uploaded_file:
-        try:
-            # --- Save temp file ---
-            temp_dir = "temp_uploads"
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, uploaded_file.name)
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            st.session_state.temp_path = temp_path
+    # -----------------------------
+    # Feature & Label Selection
+    # -----------------------------
+    feature_cols = st.multiselect("Select feature columns", options=columns)
+    remaining_cols = [c for c in columns if c not in feature_cols]
+    label_col = st.selectbox("Select label column", options=remaining_cols)
+    train_percentage = st.slider("Training %", 0.5, 0.95, 0.8, 0.05)
 
-            # --- Load CSV ---
-            df = pd.read_csv(temp_path)
-            st.success("✅ File loaded successfully!")
-            st.write("### Preview of uploaded data:")
-            st.dataframe(df.head())
+    # -----------------------------
+    # Model Type & Optional Params
+    # -----------------------------
+    try:
+        model_types_resp = requests.get(API_MODELS_URL).json()
+    except Exception:
+        model_types_resp = {}
 
-            # --- Multi-select dropdown for feature columns ---
-            all_columns = df.columns.tolist()
-            feature_cols = st.multiselect(
-                "Select feature columns",
-                options=all_columns,
-                default=all_columns[:-1]  # default: all except last column
-            )
+    if not model_types_resp:
+        model_types_resp = {"linear": {"params": {}}}  # default fallback
 
-            # --- Label selection ---
-            label_options = ["-- Select Label Column --"] + [col for col in all_columns if col not in feature_cols]
-            label_col = st.selectbox("Select label column", label_options, key="label_col_widget")
+    model_type = st.selectbox("Select model type", options=list(model_types_resp.keys()))
 
-            # --- Training options ---
-            train_percentage = st.slider("Training percentage", 0.1, 0.9, 0.8, 0.05)
+    st.subheader("Optional Parameters")
+    optional_params = {}
+    for param_name, param_type in model_types_resp.get(model_type, {}).get("params", {}).items():
+        if param_type == "int":
+            optional_params[param_name] = st.number_input(param_name, value=0, step=1)
+        elif param_type == "float":
+            optional_params[param_name] = st.number_input(param_name, value=0.0)
+        elif param_type == "str":
+            optional_params[param_name] = st.text_input(param_name)
+        elif isinstance(param_type, dict) and param_type.get("type") == "select":
+            optional_params[param_name] = st.selectbox(param_name, options=param_type.get("options", []))
 
-            # --- Multi-model selection ---
-            if api_models_url:
-                try:
-                    response = requests.get(api_models_url)
-                    if response.status_code == 200:
-                        supported_models = response.json().get("supported_models", [])
-                    else:
-                        supported_models = ["linear"]
-                except:
-                    supported_models = ["linear"]
-            else:
-                supported_models = ["linear"]
+    # -----------------------------
+    # Train Model Button
+    # -----------------------------
+    if st.button("Train Model"):
+        if not feature_cols or not label_col:
+            st.error("Please select feature and label columns.")
+            return
 
-            if not supported_models:
-                st.warning("No supported models available.")
-                return
+        # Rewind uploaded_file before sending
+        uploaded_file.seek(0)
+        files = {"csv_file": (uploaded_file.name, uploaded_file, "text/csv")}
+        data = {
+            "model_type": model_type,
+            "feature_cols": json.dumps(feature_cols),
+            "label_col": label_col,
+            "train_percentage": train_percentage,
+            "optional_params": json.dumps(optional_params)
+        }
 
-            selected_model = st.selectbox("Select model type", supported_models, index=0)
-            model_filename = f"{selected_model}.pkl"
+        with st.spinner("Training model..."):
+            response = requests.post(API_CREATE_URL, data=data, files=files)
 
-            # --- Train button ---
-            if st.button("Train Model"):
-                # --- Validation ---
-                if not feature_cols:
-                    st.error("⚠️ Please select at least one feature column.")
-                elif label_col == "-- Select Label Column --":
-                    st.error("⚠️ Please select a label column.")
-                else:
-                    payload = {
-                        "csv_file": os.path.abspath(temp_path),
-                        "feature_cols": feature_cols,
-                        "label_col": label_col,
-                        "train_percentage": train_percentage,
-                        "model_name": selected_model,
-                        "model_filename": model_filename
-                    }
-                    try:
-                        response = requests.post(api_create_url, json=payload)
-                        if response.status_code == 200:
-                            res = response.json()
-                            st.success(f"✅ {selected_model} model trained successfully!")
-
-                            if "metrics" in res:
-                                st.subheader("📊 Model Metrics")
-                                metrics = res["metrics"]
-                                st.metric("R² Score", f"{metrics.get('r2_score',0):.4f}")
-                                st.metric("MSE", f"{metrics.get('mean_squared_error',0):.2f}")
-                                st.metric("MAE", f"{metrics.get('mean_absolute_error',0):.2f}")
-
-                            st.session_state.training_completed = True
-                            st.session_state.uploaded_df = df
-                            st.session_state.feature_cols = feature_cols
-                            st.session_state.model_name = selected_model
-                            st.session_state.selected_model = selected_model
-
-                            # Remove temp file
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                                st.session_state.temp_path = None
-                        else:
-                            st.error(f"❌ Error: {response.text}")
-                    except Exception as e:
-                        st.error(f"Error sending request: {e}")
-
-            st.info("💡 Tip: Multi-select the columns to include as features.")
-
-        except Exception as e:
-            st.error(f"Error reading CSV: {e}")
-
-    else:
-        st.info("👆 Upload a CSV file to start training.")
+        if response.ok:
+            st.success("Model training started successfully!")
+            st.json(response.json())
+        else:
+            st.error(f"Training failed: {response.text}")

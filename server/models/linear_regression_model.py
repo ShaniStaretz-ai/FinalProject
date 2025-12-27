@@ -2,7 +2,7 @@ from sklearn.linear_model import LinearRegression
 from server.models.base_trainer import BaseTrainer
 
 class LinearRegressionModel(BaseTrainer):
-    def __init__(self, model_name: str, **kwargs):
+    def __init__(self, model_name: str = "linear_regression", **kwargs):
         super().__init__(model_name, model=LinearRegression(), **kwargs)
 
 

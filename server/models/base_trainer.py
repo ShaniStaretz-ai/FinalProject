@@ -34,7 +34,12 @@ class BaseTrainer:
         if not (0 < train_percentage < 1):
             raise ValueError("train_percentage must be between 0 and 1")
 
-        df = pd.read_csv(csv_file)
+            # Accept either CSV file path or DataFrame
+        if isinstance(csv_file, str):
+            df = pd.read_csv(csv_file)
+        else:
+            df = csv_file  # already a DataFrame
+
         df = self.preprocess_dates(df)
 
         X = df[feature_cols]
