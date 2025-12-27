@@ -1,52 +1,98 @@
 import streamlit as st
-import pandas as pd
 import requests
+import json
+import os
+import pandas as pd
 
-def show_predict_tab(api_predict_url):
-    st.header("Predict Using Trained Model")
+def show_predict_tab(api_predict_url, api_models_url=None):
+    st.header("Predict using a Trained Model")
 
-    if "training_completed" in st.session_state and st.session_state.training_completed:
-        df = st.session_state.uploaded_df
-        feature_cols = st.session_state.feature_cols
-        st.success("✅ Model training completed! Fill feature values to predict.")
-        # Input feature values
-        st.subheader("🧠 Input Feature Values")
-        features = {}
-        for col in feature_cols:
-            col_type = df[col].dtype
-            if pd.api.types.is_numeric_dtype(col_type):
-                val = st.number_input(f"{col}", value=float(df[col].mean()))
-            elif "date" in col.lower():
-                val = st.date_input(f"{col}")
-                val = int(pd.Timestamp(val).timestamp())
-            else:
-                options = sorted(df[col].dropna().unique())
-                val = st.selectbox(f"{col}", options)
-            features[col] = val
+    # --- File upload (optional: for dynamic features) ---
+    uploaded_file = st.file_uploader("Upload CSV (optional, for feature preview)", type="csv")
 
-        # Get model name from session state (saved during training)
-        if "model_name" in st.session_state:
-            model_name = st.session_state.model_name
-            st.info(f"📦 Using model: **{model_name}**")
-        else:
-            # Fallback to "linear" if no model name is saved
-            model_name = "linear"
-            st.warning("⚠️ No model name found. Using default: **linear**")
+    if uploaded_file:
+        try:
+            temp_dir = "temp_uploads"
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
 
-        if st.button("Predict"):
-            payload = {"features": features}
-            try:
-                # Construct the full prediction URL
-                full_predict_url = f"{api_predict_url}/{model_name}"
-                response = requests.post(full_predict_url, json=payload, timeout=30)
-                if response.status_code == 200:
-                    result = response.json()
-                    st.success("✅ Prediction successful!")
-                    prediction = result.get("prediction")
-                    st.metric("Predicted Value", f"{prediction:.4f}")
-                else:
-                    st.error(f"❌ Error: {response.text}")
-            except Exception as e:
-                st.error(f"❌ Request failed: {e}")
+            df = pd.read_csv(temp_path)
+            st.success("✅ File loaded successfully!")
+            st.write("### Preview of uploaded data:")
+            st.dataframe(df.head())
+
+            # Keep temp_path in session state
+            st.session_state.temp_path = temp_path
+            feature_columns = df.columns.tolist()
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
+            feature_columns = []
     else:
-        st.warning("⚠️ Complete model training first in the **Train Model** tab.")
+        feature_columns = []
+
+    # --- Fetch supported models only if a file was loaded ---
+    if uploaded_file and api_models_url:
+        try:
+            response = requests.get(api_models_url)
+            if response.status_code == 200:
+                supported_models = response.json().get("supported_models", [])
+            else:
+                st.warning("Unable to fetch supported models. Using default 'linear'.")
+                supported_models = ["linear"]
+        except Exception as e:
+            st.warning(f"Error fetching supported models: {e}")
+            supported_models = ["linear"]
+    else:
+        supported_models = []
+
+    if not supported_models:
+        st.info("⚠️ Load a CSV file to see available models.")
+        return
+
+    # --- Model selection ---
+    selected_model = st.selectbox("Select model", supported_models, index=0)
+
+    # --- Feature input ---
+    if feature_columns:
+        st.write("### Feature values")
+        features = {}
+        for col in feature_columns:
+            val = st.text_input(f"{col}", "")
+            if val.strip() != "":
+                # try to convert numeric values
+                try:
+                    features[col] = float(val)
+                except:
+                    features[col] = val
+    else:
+        feature_input = st.text_area(
+            "Input features as JSON",
+            '{"age":30,"salary":50000,"city":"Chicago"}'
+        )
+        try:
+            features = json.loads(feature_input) if feature_input.strip() else {}
+        except:
+            features = {}
+
+    if st.button("Predict"):
+        if not features:
+            st.error("⚠️ Please provide feature values.")
+            return
+
+        # Construct model filename automatically
+        model_filename = f"{selected_model}.pkl"
+        payload = {"features": features}
+
+        try:
+            response = requests.post(f"{api_predict_url}/{model_filename}", json=payload)
+            if response.status_code == 200:
+                res = response.json()
+                st.success(f"✅ Prediction: {res.get('prediction')}")
+            elif response.status_code == 404:
+                st.error(f"❌ Model file not found: {model_filename}")
+            else:
+                st.error(f"❌ Error: {response.text}")
+        except Exception as e:
+            st.error(f"Error sending request: {e}")
