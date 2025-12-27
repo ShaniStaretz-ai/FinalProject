@@ -1,138 +1,61 @@
+from fastapi import FastAPI, HTTPException, Request
+from server.models.model_registry import MODEL_CLASSES
+from server.models.base_trainer import BaseTrainer
 import os
-from fastapi import FastAPI, Request, HTTPException
-from dotenv import load_dotenv
 
-from server.core_models.model_registry import get_model_class, MODEL_REGISTRY
-from server.core_models.validation import validate_create_body, validate_predict_body
-from server.models.linear_regression_model import LinearRegressionModel
-from server.core_models.logger import get_logger
+app = FastAPI(title="Trainer API", version="1.0.0")
 
-# ------------------------------------------------
-# Environment
-# ------------------------------------------------
-env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-load_dotenv(dotenv_path=env_path)
+@app.get("/trained_models")
+def get_trained_models():
+    from server.config import TRAIN_MODELS_DIR
+    models = [f.replace(".pkl","") for f in os.listdir(TRAIN_MODELS_DIR) if f.endswith(".pkl")]
+    return {"trained_models": models}
 
-# ------------------------------------------------
-# Logger
-# ------------------------------------------------
-logger = get_logger("api")
-
-# ------------------------------------------------
-# App
-# ------------------------------------------------
-app = FastAPI(
-    title="Linear Regression Trainer API",
-    description="Train and predict ML models",
-    version="1.0.0"
-)
-
-
-# ------------------------------------------------
-# Middleware
-# ------------------------------------------------
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"{request.method} {request.url}")
-    response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
-    return response
-
-
-# ------------------------------------------------
-# Startup
-# ------------------------------------------------
-@app.on_event("startup")
-def startup_event():
-    logger.info("API started successfully")
-
-
-# ------------------------------------------------
-# Routes
-# ------------------------------------------------
-@app.get("/")
-def home():
-    logger.info("Health check endpoint called")
-    return {"message": "Trainer API is running"}
-
-
-# -------------------------------
-# /create → train model
-# -------------------------------
 @app.post("/create")
 async def create_model(request: Request):
-    try:
-        body = await request.json()
-        validate_create_body(body)
+    body = await request.json()
+    required_params = ["model_type", "model_name", "csv_file", "feature_cols", "label_col"]
+    missing = [p for p in required_params if p not in body]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required parameters: {', '.join(missing)}")
 
-        model_name = body.get("model_name", "linear")  # default to linear
-        modelClass = get_model_class(model_name)
-        model = modelClass()
-        logger.info(f"Starting training model: {model_name}")
+    model_type = body.pop("model_type").lower()
+    model_name = body.pop("model_name")
+    csv_file = body.pop("csv_file")
+    feature_cols = body.pop("feature_cols")
+    label_col = body.pop("label_col")
+    train_percentage = body.pop("train_percentage", 0.8)
+    optional_params = body  # any extra parameters
 
-        metrics = model.train(
-            csv_file=body["csv_file"],
-            feature_cols=body["feature_cols"],
-            label_col=body["label_col"],
-            train_percentage=body["train_percentage"]
-        )
+    if model_type not in MODEL_CLASSES:
+        raise HTTPException(status_code=400, detail=f"Unsupported model type: {model_type}")
 
-        logger.info(f"Training completed successfully {model_name}")
-        return {"status": "success", "metrics": metrics}
+    trainer_class = MODEL_CLASSES[model_type]
+    trainer = trainer_class(model_name=model_name, **optional_params)
+    metrics = trainer.train(csv_file, feature_cols, label_col, train_percentage)
+    return {"status": "success", "metrics": metrics}
 
-    except KeyError as e:
-        logger.error(str(e))
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        logger.error(f"Validation error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("Unhandled error during training")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# -------------------------------
-# /predict/{model_name} → predict
-# -------------------------------
 @app.post("/predict/{model_name}")
 async def predict_model(model_name: str, request: Request):
+    body = await request.json()
+    features = body.get("features")
+    if not features:
+        raise HTTPException(status_code=400, detail="Missing 'features' in request body")
+    optional_params = {k:v for k,v in body.items() if k != "features"}
+
+    # Infer type from model_name
+    model_type = None
+    for key in MODEL_CLASSES.keys():
+        if model_name.lower().startswith(key):
+            model_type = key
+            break
+    if model_type:
+        trainer_class = MODEL_CLASSES[model_type]
+        trainer = trainer_class(model_name=model_name, **optional_params)
+    else:
+        trainer = BaseTrainer(model_name=model_name)
     try:
-        if any(x in model_name for x in ("/", "\\", "..")):
-            raise HTTPException(status_code=400, detail="Invalid model name")
-
-        body = await request.json()
-        logger.info(f"Validating /predict input for model: {model_name}")
-        validate_predict_body(body)
-
-        modelClass = get_model_class(model_name)
-        model = modelClass()
-
-        prediction = model.predict(body["features"])
-
-        logger.info(f"Prediction successful: {prediction}")
+        prediction = trainer.predict(features)
         return {"status": "success", "prediction": prediction}
-
-    except ValueError as e:
-        logger.error(f"Validation error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError:
-        logger.warning(f"Model not found: {model_name}")
-        raise HTTPException(status_code=404, detail="Model not found")
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.exception("Prediction error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/models")
-def list_supported_models():
-    """
-    Returns a list of supported models
-    """
-    supported_models = list(MODEL_REGISTRY.keys())
-    logger.info(f"Supported models requested: {supported_models}")
-    return {"supported_models": supported_models}
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")

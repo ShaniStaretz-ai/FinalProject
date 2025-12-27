@@ -1,16 +1,13 @@
 from sklearn.linear_model import LinearRegression
 from server.models.base_trainer import BaseTrainer
 
-
 class LinearRegressionModel(BaseTrainer):
-    def __init__(self):
-        super().__init__(
-            model=LinearRegression(),
-            model_name="linear"
-        )
+    def __init__(self, model_name: str, **kwargs):
+        super().__init__(model_name, model=LinearRegression(), **kwargs)
+
 
 if __name__ == "__main__":
-    model = LinearRegressionModel()
+    model = LinearRegressionModel("LinearRegression")
 
     metrics = model.train(
         csv_file="../../employees.csv",
