@@ -1,22 +1,23 @@
 import streamlit as st
 from tabs import train_tab, predict_tab
+from config import build_urls, DEFAULT_API_BASE_URL
 
-# --- Sidebar: API URL ---
+# Sidebar
 st.sidebar.header("API Settings")
-API_BASE_URL = st.sidebar.text_input("API Base URL", "http://127.0.0.1:8000")
-CREATE_URL = f"{API_BASE_URL}/create"
-PREDICT_URL = f"{API_BASE_URL}/predict"
 
-# --- Tabs ---
+api_base_url = st.sidebar.text_input(
+    "API Base URL",
+    DEFAULT_API_BASE_URL,
+    key="api_base_url"
+)
+
+urls = build_urls(api_base_url)
+
+# Tabs
 tabs = st.tabs(["Train Model", "Predict"])
 
-############################
-# --- Tab 1: Train Model ---
-############################
 with tabs[0]:
-    train_tab.show_train_tab(CREATE_URL)
-############################
-# --- Tab 2: Predict ---
-############################
+    train_tab.show_train_tab(urls)
+
 with tabs[1]:
-    predict_tab.show_predict_tab(PREDICT_URL)
+    predict_tab.show_predict_tab(urls)

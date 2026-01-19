@@ -5,6 +5,12 @@ scikit-learn
 pandas
 joblib
 python-dotenv
+python-multipart
+psycopg2-binary
+bcrypt
+email-validator
+PyJWT
+pydantic[email]
 
 # Client
 streamlit
