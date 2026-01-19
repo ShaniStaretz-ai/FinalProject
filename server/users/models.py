@@ -9,3 +9,12 @@ class UserCreateRequest(BaseModel):
 class UserLoginRequest(BaseModel):
     email: EmailStr
     pwd: str
+
+class TokenInfoRequest(BaseModel):
+    username: str
+    credit_card: str
+    amount: int
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"

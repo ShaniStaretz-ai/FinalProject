@@ -9,6 +9,7 @@ python-multipart
 psycopg2-binary
 passlib[bcrypt]
 email-validator
+python-jose[cryptography]
 
 # Client
 streamlit
