@@ -7,13 +7,15 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Depends, status
 from fastapi.concurrency import run_in_threadpool
 from sklearn.utils._param_validation import InvalidParameterError
 
 from server.config import TRAIN_MODELS_DIR
 from server.models.model_classes import MODEL_CLASSES
 from server.models.base_trainer import BaseTrainer
+from server.security.jwt_auth import get_current_user
+from server.users.repository import check_and_deduct_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +50,20 @@ def parse_csv(upload_file: UploadFile) -> pd.DataFrame:
 def parse_json_param(param: str, param_name: str) -> Any:
     """
     Parses a JSON string parameter and raises HTTPException if invalid.
+    For 'feature_cols', also accepts comma-separated string format as fallback.
     """
     try:
         return json.loads(param)
     except json.JSONDecodeError:
+        # Special handling for feature_cols: accept comma-separated string
+        if param_name == "feature_cols":
+            # Try to parse as comma-separated string
+            if isinstance(param, str) and not param.startswith('['):
+                # Split by comma and strip whitespace
+                return [col.strip() for col in param.split(',') if col.strip()]
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid JSON in parameter '{param_name}'"
+            detail=f"Invalid JSON in parameter '{param_name}'. Expected JSON format (e.g., [\"age\",\"salary\"] for feature_cols)"
         )
 
 def validate_optional_params(trainer_cls, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -100,11 +109,16 @@ async def create_model(
     label_col: str = Form(...),
     train_percentage: float = Form(0.8),
     csv_file: Optional[UploadFile] = File(None),
-    optional_params: str = Form("{}")
+    optional_params: str = Form("{}"),
+    current_user: str = Depends(get_current_user)
 ):
     """
     Train a new ML model.
+    Requires authentication and deducts 1 token after validation passes.
     """
+    TRAINING_TOKEN_COST = 1
+    
+    # Validate inputs first
     if csv_file is None:
         raise HTTPException(status_code=400, detail="CSV file missing")
 
@@ -124,6 +138,9 @@ async def create_model(
     trainer_cls = MODEL_CLASSES[model_type]
     valid_optional_params = validate_optional_params(trainer_cls, optional_params_dict)
 
+    # All validations passed - now check and deduct tokens
+    check_and_deduct_tokens(current_user, TRAINING_TOKEN_COST)
+
     # Initialize and train in threadpool (async safe)
     try:
         trainer = trainer_cls(**valid_optional_params)
@@ -134,14 +151,22 @@ async def create_model(
         logger.exception("Training failed")
         raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
-    return {"status": "success", "metrics": metrics}
+    return {"status": "success", "metrics": metrics, "tokens_deducted": TRAINING_TOKEN_COST}
 
 
 @router.post("/predict/{model_name}")
-async def predict_model(model_name: str, request: Request):
+async def predict_model(
+    model_name: str,
+    request: Request,
+    current_user: str = Depends(get_current_user)
+):
     """
     Make a prediction using a trained model.
+    Requires authentication and deducts 5 tokens after validation passes.
     """
+    PREDICTION_TOKEN_COST = 5
+    
+    # Validate inputs first
     body = await request.json()
     features = body.get("features")
     if not features:
@@ -151,12 +176,17 @@ async def predict_model(model_name: str, request: Request):
     # Infer model type
     model_type = next((k for k in MODEL_CLASSES.keys() if model_name.lower().startswith(k)), None)
     trainer_cls = MODEL_CLASSES.get(model_type, BaseTrainer)
+    
+    # Validate optional parameters
     valid_optional_params = validate_optional_params(trainer_cls, optional_params)
+
+    # All validations passed - now check and deduct tokens
+    check_and_deduct_tokens(current_user, PREDICTION_TOKEN_COST)
 
     trainer = trainer_cls(model_name=model_name, **valid_optional_params)
     try:
         prediction = trainer.predict(features)
-        return {"status": "success", "prediction": prediction}
+        return {"status": "success", "prediction": prediction, "tokens_deducted": PREDICTION_TOKEN_COST}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")
     except Exception as e:

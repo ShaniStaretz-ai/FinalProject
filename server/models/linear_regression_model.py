@@ -2,8 +2,13 @@ from sklearn.linear_model import LinearRegression
 from server.models.base_trainer import BaseTrainer
 
 class LinearRegressionModel(BaseTrainer):
-    def __init__(self, model_name: str = "linear_regression", **kwargs):
-        super().__init__(model_name, model=LinearRegression(), **kwargs)
+    OPTIONAL_PARAMS = {
+        "fit_intercept": "bool",
+    }
+    
+    def __init__(self, model_name: str = "linear_regression", fit_intercept: bool = True, **kwargs):
+        model = LinearRegression(fit_intercept=fit_intercept)
+        super().__init__(model_name, model=model, **kwargs)
 
 
 if __name__ == "__main__":

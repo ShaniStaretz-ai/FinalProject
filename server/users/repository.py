@@ -1,6 +1,7 @@
 from typing import Optional
 import logging
 from psycopg2.extras import RealDictCursor
+from fastapi import HTTPException, status
 
 from server.security.passwords import hash_password, verify_password
 from server.db.connection import get_connection
@@ -177,3 +178,34 @@ def update_user_tokens(email: str, new_tokens: int) -> bool:
     except Exception as e:
         logger.error(f"Error updating tokens for {email}: {e}")
         return False
+
+
+def check_and_deduct_tokens(email: str, required_tokens: int) -> bool:
+    """
+    Check if user has enough tokens and deduct them.
+    Returns True if successful.
+    Raises HTTPException on errors.
+    """
+    current_tokens = get_user_tokens(email)
+    if current_tokens is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    if current_tokens < required_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=f"Insufficient tokens. Required: {required_tokens}, Available: {current_tokens}"
+        )
+    
+    new_tokens = current_tokens - required_tokens
+    success = update_user_tokens(email, new_tokens)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update tokens"
+        )
+    
+    logger.info(f"User {email}: Deducted {required_tokens} tokens. Remaining: {new_tokens}")
+    return True
