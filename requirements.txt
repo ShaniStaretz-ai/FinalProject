@@ -7,9 +7,10 @@ joblib
 python-dotenv
 python-multipart
 psycopg2-binary
-passlib[bcrypt]
+bcrypt
 email-validator
-python-jose[cryptography]
+PyJWT
+pydantic[email]
 
 # Client
 streamlit

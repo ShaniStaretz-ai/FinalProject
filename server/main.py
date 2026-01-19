@@ -22,7 +22,6 @@ from server.users.routes import router as user_router
 # -----------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
 # -----------------------------
 # FastAPI app
 # -----------------------------
