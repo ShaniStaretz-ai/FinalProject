@@ -7,6 +7,10 @@ class LinearRegressionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
     model = LinearRegressionModel("LinearRegression")
 
     metrics = model.train(
@@ -23,5 +27,5 @@ if __name__ == "__main__":
         "hire_date": 1583020800
     })
 
-    print("Metrics:", metrics)
-    print("Prediction:", prediction)
+    logger.info(f"Metrics: {metrics}")
+    logger.info(f"Prediction: {prediction}")

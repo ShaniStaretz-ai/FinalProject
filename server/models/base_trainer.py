@@ -8,7 +8,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
 from server.config import TRAIN_MODELS_DIR, METRICS_DIR
-from server.core_models.logger import get_logger
+from server.core_models.server_logger import get_logger
 
 class BaseTrainer:
     def __init__(self, model_name: str, **kwargs):
@@ -22,9 +22,14 @@ class BaseTrainer:
         os.makedirs(self.metrics_dir, exist_ok=True)
 
     def preprocess_dates(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Preprocess date columns by converting them to Unix timestamps.
+        Detects date columns by checking pandas dtype, not just column name.
+        """
         self.logger.info("Preprocessing date columns")
         for col in df.columns:
-            if "date" in col:
+            # Check if column is datetime type or contains 'date' in name
+            if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col.lower():
                 df[col] = pd.to_datetime(df[col], errors="coerce")
                 df[col] = df[col].map(lambda x: x.timestamp() if pd.notnull(x) else 0)
         return df
@@ -34,13 +39,21 @@ class BaseTrainer:
         if not (0 < train_percentage < 1):
             raise ValueError("train_percentage must be between 0 and 1")
 
-            # Accept either CSV file path or DataFrame
+        # Accept either CSV file path or DataFrame
         if isinstance(csv_file, str):
             df = pd.read_csv(csv_file)
         else:
             df = csv_file  # already a DataFrame
 
         df = self.preprocess_dates(df)
+
+        # Validate columns exist
+        missing_features = [col for col in feature_cols if col not in df.columns]
+        if missing_features:
+            raise ValueError(f"Feature columns not found in data: {missing_features}")
+        
+        if label_col not in df.columns:
+            raise ValueError(f"Label column '{label_col}' not found in data")
 
         X = df[feature_cols]
         y = df[label_col]
@@ -85,7 +98,28 @@ class BaseTrainer:
         return metrics
 
     def predict(self, features: dict):
-        model_path = os.path.join(self.train_dir, f"{self.model_name}.pkl")
+        """
+        Predict using a trained model.
+        
+        Args:
+            features: Dictionary of feature names to values
+            
+        Returns:
+            float: Prediction value
+            
+        Raises:
+            FileNotFoundError: If model file doesn't exist
+            ValueError: If features dictionary is empty
+        """
+        if not features:
+            raise ValueError("Features dictionary cannot be empty")
+        
+        # Sanitize model name to prevent path traversal
+        safe_model_name = os.path.basename(self.model_name)
+        if safe_model_name != self.model_name:
+            raise ValueError(f"Invalid model name: {self.model_name}")
+        
+        model_path = os.path.join(self.train_dir, f"{safe_model_name}.pkl")
         self.logger.info("Loading model for prediction")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model not found: {model_path}")

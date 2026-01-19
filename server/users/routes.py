@@ -1,8 +1,8 @@
 from fastapi import HTTPException, Depends, APIRouter, status
 
 from server.security.jwt_auth import create_jwt, get_current_user
-from server.users.models import UserCreateRequest, UserLoginRequest
-from server.users.repository import create_user, validate_user, delete_user, get_user_tokens
+from server.users.models import UserCreateRequest, UserLoginRequest, UserDeleteRequest
+from server.users.repository import create_user, validate_user, delete_user, delete_user_by_id, get_user_tokens, get_user_id_by_email
 
 router = APIRouter(
     prefix="/user",   # optional: adds /user to all endpoints
@@ -14,7 +14,7 @@ router = APIRouter(
 # Endpoints
 # -----------------------------
 @router.post("/create")
-def user_create(payload: UserCreateRequest):
+async def user_create(payload: UserCreateRequest):
     """
     Create a new user account.
     User must log in separately after account creation.
@@ -34,7 +34,7 @@ def user_create(payload: UserCreateRequest):
 
 
 @router.post("/login")
-def user_login(payload: UserLoginRequest):
+async def user_login(payload: UserLoginRequest):
     """
     Login endpoint. Accepts email and password, returns JWT token.
     """
@@ -55,17 +55,37 @@ def user_login(payload: UserLoginRequest):
 
 
 @router.delete("/remove_user")
-async def user_delete(current_user: str = Depends(get_current_user)):
+async def user_delete(
+    payload: UserDeleteRequest,
+    current_user: str = Depends(get_current_user)
+):
     """
-    Delete the current authenticated user.
+    Delete a user by ID. Requires valid authentication token.
+    Users CANNOT delete their own account - they can only delete other users' accounts.
     """
-    success = delete_user(current_user)
+    # Get the authenticated user's ID
+    authenticated_user_id = get_user_id_by_email(current_user)
+    if authenticated_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Authenticated user not found"
+        )
+    
+    # Prevent users from deleting their own account
+    if payload.user_id == authenticated_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You cannot delete your own account"
+        )
+    
+    # Delete the requested user (must be different from authenticated user)
+    success = delete_user_by_id(payload.user_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail=f"User with ID {payload.user_id} not found"
         )
-    return {"status": "success", "message": f"User {current_user} deleted"}
+    return {"status": "success", "message": f"User with ID {payload.user_id} deleted"}
 
 
 @router.get("/tokens")

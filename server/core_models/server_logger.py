@@ -2,6 +2,24 @@ import logging
 import os
 
 
+def setup_logging(level: int = logging.INFO, format_string: str = None):
+    """
+    Set up basic logging configuration for the application.
+    Should be called early in the application startup.
+    
+    Args:
+        level: Logging level (default: logging.INFO)
+        format_string: Custom format string for log messages
+    """
+    if format_string is None:
+        format_string = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    
+    logging.basicConfig(
+        level=level,
+        format=format_string
+    )
+
+
 def get_logger(name: str) -> logging.Logger:
     """
     Returns a configured logger instance.
@@ -36,3 +54,4 @@ def get_logger(name: str) -> logging.Logger:
     logger.addHandler(console_handler)
 
     return logger
+

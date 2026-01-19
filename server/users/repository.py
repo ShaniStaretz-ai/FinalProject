@@ -15,6 +15,7 @@ def create_user(email: str, pwd: str, tokens: int = 15) -> bool:
     Create a new user with hashed password and initial tokens.
     Returns True on success, False if user already exists or error occurs.
     """
+    import psycopg2
     try:
         pwd_hashed = hash_password(pwd)  # centralized helper
         conn = get_connection()
@@ -28,11 +29,20 @@ def create_user(email: str, pwd: str, tokens: int = 15) -> bool:
                 conn.commit()  # Explicitly commit the transaction
                 logger.info(f"Created user {email} with ID {new_id}")
             return True
+        except psycopg2.IntegrityError as e:
+            # User already exists (unique constraint violation)
+            conn.rollback()
+            logger.warning(f"User {email} already exists")
+            return False
         except Exception as e:
             conn.rollback()  # Rollback on error
             raise
         finally:
             conn.close()
+    except ValueError as e:
+        # Password validation error
+        logger.error(f"Password validation error for {email}: {e}")
+        return False
     except Exception as e:
         logger.error(f"Error creating user {email}: {e}")
         return False
@@ -84,6 +94,47 @@ def delete_user(email: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting user {email}: {e}")
         return False
+
+def delete_user_by_id(user_id: int) -> bool:
+    """
+    Delete user by ID. Returns True if deleted, False if not found.
+    """
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ml_user WHERE id=%s RETURNING email", (user_id,))
+                result = cur.fetchone()
+                deleted = cur.rowcount
+                conn.commit()  # Explicitly commit the transaction
+                if deleted > 0 and result:
+                    logger.info(f"Deleted user with ID {user_id} (email: {result[0]})")
+                return deleted > 0
+        except Exception as e:
+            conn.rollback()  # Rollback on error
+            raise
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error deleting user with ID {user_id}: {e}")
+        return False
+
+def get_user_id_by_email(email: str) -> Optional[int]:
+    """
+    Get user ID by email. Returns int or None if user not found.
+    """
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM ml_user WHERE email=%s", (email,))
+                row = cur.fetchone()
+                return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error fetching user ID for {email}: {e}")
+        return None
 
 def get_user_tokens(email: str) -> Optional[int]:
     """

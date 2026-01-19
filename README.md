@@ -112,11 +112,13 @@ DB_NAME=your_database_name
 DB_USER=your_database_user
 DB_PASSWORD=your_database_password
 
-# JWT Configuration
+# JWT Configuration (REQUIRED - server will not start without JWT_SECRET)
 JWT_SECRET=your-secret-key-change-in-production
 JWT_ALGORITHM=HS256
 JWT_EXP_MINUTES=60
 ```
+
+   **⚠️ Important:** The `JWT_SECRET` environment variable is **REQUIRED**. The server will not start without it. Use a strong, random secret key for production.
 
 6. **Initialize the database**
 ```bash

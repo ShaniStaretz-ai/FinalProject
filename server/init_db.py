@@ -1,5 +1,8 @@
-from db.connection import get_connection
-from db.schema import ML_USER_TABLE_SQL
+import logging
+from server.db.connection import get_connection
+from server.db.schema import ML_USER_TABLE_SQL
+
+logger = logging.getLogger(__name__)
 
 
 def init_db():
@@ -8,7 +11,7 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute(ML_USER_TABLE_SQL)
         conn.commit()
-        print("Database initialized")
+        logger.info("Database initialized")
     finally:
         conn.close()
 
