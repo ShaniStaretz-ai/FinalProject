@@ -6,6 +6,9 @@ pandas
 joblib
 python-dotenv
 python-multipart
+psycopg2-binary
+passlib[bcrypt]
+email-validator
 
 # Client
 streamlit

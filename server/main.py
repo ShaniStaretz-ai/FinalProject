@@ -1,54 +1,106 @@
-import os
-import shutil
-import tempfile
-from io import StringIO, BytesIO
+"""
+Main FastAPI app for ML model training and prediction.
+"""
+
 from pathlib import Path
-import pandas as pd
 import json
-from fastapi import FastAPI, HTTPException, Request,UploadFile, File, Form
+import logging
+from typing import Optional, Dict, Any, List
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
+from fastapi.concurrency import run_in_threadpool
 from sklearn.utils._param_validation import InvalidParameterError
 
 from server.config import TRAIN_MODELS_DIR
 from server.models.model_classes import MODEL_CLASSES
 from server.models.base_trainer import BaseTrainer
-
-
-app = FastAPI(title="Trainer API", version="1.0.0")
+from server.users.routes import router as user_router
 
 # -----------------------------
-# Return all supported models + optional parameters
+# Logging setup
+# -----------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logging.getLogger("passlib.handlers.bcrypt").setLevel(logging.ERROR)
+# -----------------------------
+# FastAPI app
+# -----------------------------
+app = FastAPI(title="Trainer API", version="1.0.0")
+app.include_router(user_router)
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+def parse_csv(upload_file: UploadFile) -> pd.DataFrame:
+    """
+    Reads an uploaded CSV file and returns a pandas DataFrame.
+    Raises HTTPException on errors.
+    """
+    try:
+        contents = upload_file.file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="CSV file is empty")
+        # Reset pointer in case file is read again
+        upload_file.file.seek(0)
+        df = pd.read_csv(upload_file.file)
+        if df.empty:
+            raise HTTPException(status_code=400, detail="CSV file has no data")
+        return df
+    except pd.errors.EmptyDataError:
+        raise HTTPException(status_code=400, detail="CSV file is empty")
+    except Exception as e:
+        logger.exception("Failed to read CSV")
+        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
+
+def parse_json_param(param: str, param_name: str) -> Any:
+    """
+    Parses a JSON string parameter and raises HTTPException if invalid.
+    """
+    try:
+        return json.loads(param)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid JSON in parameter '{param_name}'"
+        )
+
+def validate_optional_params(trainer_cls, params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Filters the optional parameters to include only valid keys defined in trainer_cls.OPTIONAL_PARAMS.
+    """
+    allowed_params = getattr(trainer_cls, "OPTIONAL_PARAMS", {})
+    invalid_keys = [k for k in params.keys() if k not in allowed_params]
+    if invalid_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid optional parameter(s): {invalid_keys}"
+        )
+    return {k: params[k] for k in params if k in allowed_params}
+
+
+# -----------------------------
+# Endpoints
 # -----------------------------
 @app.get("/models")
-async def get_models():
+async def get_models() -> Dict[str, Dict[str, Any]]:
     """
     Returns a dict of all supported models with optional parameters.
-    Example:
-    {
-        "knn": {"params": {"n_neighbors": "int", "weights": "str"}},
-        "random_forest": {"params": {"n_estimators": "int"}}
-    }
     """
-    models_info = {}
-    for name, cls in MODEL_CLASSES.items():
-        models_info[name] = {"params": getattr(cls, "OPTIONAL_PARAMS", {})}
-    return models_info
-
-
-# -----------------------------
-# Return trained models
-# -----------------------------
+    return {name: {"params": getattr(cls, "OPTIONAL_PARAMS", {})} for name, cls in sorted(MODEL_CLASSES.items())}
 
 
 @app.get("/trained")
-async def get_trained_models():
+async def get_trained_models() -> List[str]:
     """
     Returns the list of trained model filenames (without extensions/timestamps)
     """
     p = Path(TRAIN_MODELS_DIR)
-    models = [f.stem for f in p.glob("*.pkl")]
-    return models
+    if not p.exists():
+        return []
+    return [f.stem for f in p.glob("*.pkl")]
 
-from typing import Optional
+
 @app.post("/create")
 async def create_model(
     model_type: str = Form(...),
@@ -58,74 +110,37 @@ async def create_model(
     csv_file: Optional[UploadFile] = File(None),
     optional_params: str = Form("{}")
 ):
-    print("=== /create called ===")
     if csv_file is None:
-        print("No CSV file provided")
         raise HTTPException(status_code=400, detail="CSV file missing")
 
-    # Read the uploaded file
-    try:
-        contents = await csv_file.read()  # async read
-        print(f"Raw file size (bytes): {len(contents)}")
+    df = await run_in_threadpool(parse_csv, csv_file)
+    feature_cols_list = parse_json_param(feature_cols, "feature_cols")
+    optional_params_dict = parse_json_param(optional_params, "optional_params")
 
-        if not contents:
-            print("CSV file is empty after read()")
-            raise HTTPException(status_code=400, detail="CSV file is empty")
-
-        # Reset file pointer in case of future reads
-        csv_file.file.seek(0)
-
-        # Decode bytes to string if necessary
-        if isinstance(contents, bytes):
-            contents = contents.decode("utf-8")
-
-        # Load CSV into DataFrame
-        df = pd.read_csv(StringIO(contents))
-        print(f"CSV loaded successfully: {df.shape[0]} rows, {df.shape[1]} columns")
-    except pd.errors.EmptyDataError:
-        print("EmptyDataError: CSV file has no data")
-        raise HTTPException(status_code=400, detail="CSV file is empty")
-    except Exception as e:
-        print(f"Exception reading CSV: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
-
-    # Parse JSON from client
-    try:
-        feature_cols = json.loads(feature_cols)
-        optional_params = json.loads(optional_params)
-        print(f"Feature columns: {feature_cols}")
-        print(f"Optional parameters: {optional_params}")
-    except json.JSONDecodeError:
-        print("Invalid JSON in feature_cols or optional_params")
-        raise HTTPException(status_code=400, detail="Invalid JSON in feature_cols or optional_params")
-
-    # Validate feature and label columns
-    missing_cols = [c for c in feature_cols + [label_col] if c not in df.columns]
+    # Validate columns
+    missing_cols = [c for c in feature_cols_list + [label_col] if c not in df.columns]
     if missing_cols:
-        print(f"Columns missing in CSV: {missing_cols}")
         raise HTTPException(status_code=400, detail=f"Columns not found in CSV: {missing_cols}")
 
     # Validate model type
     if model_type not in MODEL_CLASSES:
-        print(f"Model type '{model_type}' not recognized")
         raise HTTPException(status_code=400, detail=f"Model type '{model_type}' not recognized")
 
-    # Initialize and train model
-    trainer_class = MODEL_CLASSES[model_type]
+    trainer_cls = MODEL_CLASSES[model_type]
+    valid_optional_params = validate_optional_params(trainer_cls, optional_params_dict)
+
+    # Initialize and train in threadpool (async safe)
     try:
-        print("Initializing trainer...")
-        trainer = trainer_class(**optional_params)
-        print("Training model...")
-        metrics = trainer.train(df, feature_cols, label_col, train_percentage)
-        print("Training completed successfully")
+        trainer = trainer_cls(**valid_optional_params)
+        metrics = await run_in_threadpool(trainer.train, df, feature_cols_list, label_col, train_percentage)
     except InvalidParameterError as e:
-        print(f"InvalidParameterError: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid model parameter: {e}")
     except Exception as e:
-        print(f"Unexpected training error: {e}")
+        logger.exception("Training failed")
         raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
     return {"status": "success", "metrics": metrics}
+
 
 @app.post("/predict/{model_name}")
 async def predict_model(model_name: str, request: Request):
@@ -133,21 +148,19 @@ async def predict_model(model_name: str, request: Request):
     features = body.get("features")
     if not features:
         raise HTTPException(status_code=400, detail="Missing 'features' in request body")
-    optional_params = {k:v for k,v in body.items() if k != "features"}
+    optional_params = {k: v for k, v in body.items() if k != "features"}
 
-    # Infer type from model_name
-    model_type = None
-    for key in MODEL_CLASSES.keys():
-        if model_name.lower().startswith(key):
-            model_type = key
-            break
-    if model_type:
-        trainer_class = MODEL_CLASSES[model_type]
-        trainer = trainer_class(model_name=model_name, **optional_params)
-    else:
-        trainer = BaseTrainer(model_name=model_name)
+    # Infer model type
+    model_type = next((k for k in MODEL_CLASSES.keys() if model_name.lower().startswith(k)), None)
+    trainer_cls = MODEL_CLASSES.get(model_type, BaseTrainer)
+    valid_optional_params = validate_optional_params(trainer_cls, optional_params)
+
+    trainer = trainer_cls(model_name=model_name, **valid_optional_params)
     try:
         prediction = trainer.predict(features)
         return {"status": "success", "prediction": prediction}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")
+    except Exception as e:
+        logger.exception("Prediction failed")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
