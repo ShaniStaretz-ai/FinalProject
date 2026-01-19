@@ -26,7 +26,11 @@ class BaseTrainer:
         Preprocess date columns by converting them to Unix timestamps.
         Detects date columns by checking pandas dtype, not just column name.
         """
-        self.logger.info("Preprocessing date columns")
+        # Only log if date columns are found
+        date_cols = [col for col in df.columns 
+                    if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col.lower()]
+        if date_cols:
+            self.logger.info(f"Preprocessing {len(date_cols)} date column(s)")
         for col in df.columns:
             # Check if column is datetime type or contains 'date' in name
             if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col.lower():
@@ -35,7 +39,7 @@ class BaseTrainer:
         return df
 
     def train(self, csv_file, feature_cols, label_col, train_percentage=0.8):
-        self.logger.info("Starting training process")
+        self.logger.info(f"Training: {len(feature_cols)} features, {label_col} label")
         if not (0 < train_percentage < 1):
             raise ValueError("train_percentage must be between 0 and 1")
 
@@ -75,7 +79,6 @@ class BaseTrainer:
             X, y, train_size=train_percentage, random_state=42
         )
 
-        self.logger.info("Training model...")
         pipeline.fit(X_train, y_train)
 
         y_pred = pipeline.predict(X_test)
@@ -92,8 +95,7 @@ class BaseTrainer:
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=4)
 
-        self.logger.info(f"Model saved: {model_path}")
-        self.logger.info(f"Metrics saved: {metrics_path}")
+        self.logger.info(f"Saved: R²={metrics['r2_score']:.3f}, MSE={metrics['mean_squared_error']:.2f}")
 
         return metrics
 
@@ -120,7 +122,6 @@ class BaseTrainer:
             raise ValueError(f"Invalid model name: {self.model_name}")
         
         model_path = os.path.join(self.train_dir, f"{safe_model_name}.pkl")
-        self.logger.info("Loading model for prediction")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model not found: {model_path}")
         model = joblib.load(model_path)

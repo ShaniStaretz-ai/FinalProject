@@ -17,16 +17,25 @@ A full-stack project to **train and predict Linear Regression models** via a RES
 ### Server (FastAPI)
 - **Authentication System:**
   - User registration and login with JWT tokens
-  - Password hashing using bcrypt
+  - Password hashing using bcrypt (72-byte safe)
   - Protected endpoints requiring authentication
   - Token-based authentication via HTTPBearer
+  - Users can only access their own models
+- **Token System:**
+  - New users receive 15 tokens by default
+  - Training a model costs 1 token
+  - Making a prediction costs 5 tokens
+  - Users can check their token balance via `/user/tokens`
 - **Model Training:**
   - Train Linear Regression and KNN models from CSV files
   - Automatic handling of numeric, categorical, and date columns
   - Returns model metrics: R² score, Mean Squared Error (MSE), Mean Absolute Error (MAE)
+  - Models are automatically associated with the authenticated user
+  - Unique model names: `{user_id}_{model_type}_{timestamp}` or custom names
 - **Prediction:**
-  - Predict using trained models
+  - Predict using trained models (only your own models)
   - Support for multiple model types
+  - Automatic model ownership verification
 
 ### Client (Streamlit)
 - Upload CSV files and select feature/label columns dynamically
@@ -50,7 +59,11 @@ FinalProject/
 │ │ ├─ base_trainer.py
 │ │ ├─ linear_regression_model.py
 │ │ ├─ knn_model.py
-│ │ └─ model_registry.py
+│ │ ├─ model_classes.py
+│ │ ├─ routes.py                 # Model endpoints
+│ │ └─ repository.py             # Model database operations
+│ ├─ core_models/               # Core utilities
+│ │ └─ server_logger.py          # Centralized logging
 │ ├─ users/                     # User management
 │ │ ├─ routes.py                 # User endpoints
 │ │ ├─ repository.py             # Database operations
@@ -120,11 +133,9 @@ JWT_EXP_MINUTES=60
 
    **⚠️ Important:** The `JWT_SECRET` environment variable is **REQUIRED**. The server will not start without it. Use a strong, random secret key for production.
 
-6. **Initialize the database**
-```bash
-cd server
-python init_db.py
-```
+6. **Database initialization**
+   - The database tables are automatically created when the server starts
+   - Manual initialization (optional): `cd server && python init_db.py`
 
 ---
 
@@ -205,7 +216,22 @@ Authorization: Bearer <your_access_token>
 ```http
 DELETE /user/remove_user
 Authorization: Bearer <your_access_token>
+Content-Type: application/json
+
+{
+  "user_id": 5
+}
 ```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "User with ID 5 deleted"
+}
+```
+
+**Note:** Users cannot delete their own account. They can only delete other users' accounts.
 
 ### Model Training & Prediction Endpoints
 
@@ -214,25 +240,55 @@ Authorization: Bearer <your_access_token>
 GET /models
 ```
 
-#### Get Trained Models
+#### Get Trained Models (Protected)
 ```http
 GET /trained
+Authorization: Bearer <your_access_token>
 ```
 
-#### Train Model
+**Response:** Returns only models owned by the authenticated user
+```json
+[
+  "3_knn_20260119_190735_140414",
+  "3_linear_20260119_185500_123456"
+]
+```
+
+#### Train Model (Protected)
 ```http
 POST /create
 Content-Type: multipart/form-data
+Authorization: Bearer <your_access_token>
 
 model_type: linear (or knn)
-feature_cols: ["column1", "column2"]
+feature_cols: ["column1", "column2"] (or "column1,column2" as comma-separated string)
 label_col: target_column
-train_percentage: 0.8
+train_percentage: 0.8 (must be between 0 and 1)
 csv_file: <file>
-optional_params: {}
+optional_params: {} (JSON string, e.g., '{"fit_intercept": true}' for linear)
+model_filename: optional_custom_name (optional - if not provided, auto-generated)
 ```
 
-#### Predict
+**Response:**
+```json
+{
+  "status": "success",
+  "model_name": "3_knn_20260119_190735_140414",
+  "metrics": {
+    "r2_score": 0.856,
+    "mean_squared_error": 1234.56,
+    "mean_absolute_error": 25.43
+  },
+  "tokens_deducted": 1
+}
+```
+
+**Model Name Format:**
+- Auto-generated: `{user_id}_{model_type}_{YYYYMMDD}_{HHMMSS}_{microseconds}`
+- Example: `3_knn_20260119_190735_140414`
+- Custom names are sanitized and prefixed with user_id for security
+
+#### Predict (Protected)
 ```http
 POST /predict/{model_name}
 Content-Type: application/json
@@ -242,9 +298,21 @@ Authorization: Bearer <your_access_token>
   "features": {
     "column1": 10,
     "column2": "value"
-  }
+  },
+  "optional_params": {}  // Optional model-specific parameters
 }
 ```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "prediction": 123.45,
+  "tokens_deducted": 5
+}
+```
+
+**Note:** You can only predict with models you own. The system verifies ownership before allowing prediction.
 
 ---
 
@@ -310,45 +378,73 @@ streamlit run app.py
 
 ### Training Models
 
-1. Upload a CSV file via `/create` endpoint or Streamlit client
-2. Select feature columns and label column
-3. Set training percentage and model type (linear or knn)
-4. Click Train Model
-5. Model metrics (R², MSE, MAE) are displayed
-6. Model is saved to `server/train_models/`
+1. **Authenticate:** Get a JWT token via `/user/login`
+2. **Check tokens:** Verify you have enough tokens (1 token required for training)
+3. **Upload CSV:** Upload a CSV file via `/create` endpoint or Streamlit client
+4. **Select columns:** Choose feature columns and label column
+5. **Configure model:**
+   - Set training percentage (0.0 to 1.0)
+   - Choose model type (linear or knn)
+   - Optionally provide a custom model name
+   - Set optional parameters (e.g., `fit_intercept` for linear regression)
+6. **Train:** Click Train Model (1 token is deducted)
+7. **Results:** Model metrics (R², MSE, MAE) are displayed
+8. **Storage:** 
+   - Model is saved to `server/train_models/{model_name}.pkl`
+   - Model record is stored in database with ownership information
 
 ### Prediction
 
-1. Fill in feature values for prediction (numeric, categorical, or date)
-2. Enter the trained model filename
-3. Click Predict to get results
+1. **Authenticate:** Ensure you have a valid JWT token
+2. **Check tokens:** Verify you have enough tokens (5 tokens required for prediction)
+3. **Select model:** Choose from your trained models (only your models are accessible)
+4. **Fill features:** Enter feature values (numeric, categorical, or date)
+5. **Predict:** Click Predict (5 tokens are deducted)
+6. **Results:** Prediction value is returned
 
 ### Notes
 
-- Dates are converted to Unix timestamps automatically
-- Numeric columns default to mean values for prediction inputs
-- Categorical columns appear as dropdowns of unique values
-- Removing the uploaded file resets all tabs automatically
-- Passwords must be at least 4 characters
-- JWT tokens expire after 60 minutes (configurable via `JWT_EXP_MINUTES`)
+- **Model Ownership:** Each model is associated with the user who created it
+- **Model Names:** Auto-generated names include user ID, model type, and timestamp with microseconds for uniqueness
+- **Token System:** 
+  - Training costs 1 token
+  - Prediction costs 5 tokens
+  - Check your balance with `/user/tokens`
+- **Data Preprocessing:**
+  - Dates are converted to Unix timestamps automatically
+  - Categorical columns are one-hot encoded
+  - Numeric columns are passed through as-is
+- **Input Formats:**
+  - `feature_cols` can be sent as JSON array: `["age", "salary"]`
+  - Or as comma-separated string: `"age,salary"`
+- **Passwords:** Must be at least 4 characters (max 72 bytes due to bcrypt limit)
+- **JWT Tokens:** Expire after 60 minutes (configurable via `JWT_EXP_MINUTES`)
+- **Database:** Tables are automatically created on server startup
+- **Logging:** Concise logs with format: `HH:MM:SS | LEVEL | Module | Message`
 
 ---
 
 ## Security Features
 
-- **Password Hashing:** Bcrypt with automatic 72-byte truncation
+- **Password Hashing:** Bcrypt with automatic 72-byte truncation and UTF-8 safe handling
 - **JWT Tokens:** Secure token-based authentication using PyJWT
-- **Protected Endpoints:** User-specific data access
+- **Protected Endpoints:** User-specific data access with ownership verification
 - **Database Transactions:** Proper commit/rollback handling
+- **Model Ownership:** Users can only access, train, and predict with their own models
+- **Input Validation:** Comprehensive validation for all inputs
+- **Path Traversal Protection:** Model names are sanitized to prevent directory traversal
+- **SQL Injection Prevention:** All queries use parameterized statements
 
 ---
 
 ## Technologies Used
 
-- **Backend:** FastAPI, PyJWT, bcrypt, PostgreSQL, scikit-learn, pandas
+- **Backend:** FastAPI, PyJWT, bcrypt, PostgreSQL, scikit-learn, pandas, joblib
 - **Frontend:** Streamlit
-- **Database:** PostgreSQL with psycopg2
+- **Database:** PostgreSQL with psycopg2 (connection pooling recommended for production)
 - **Authentication:** JWT tokens with HTTPBearer
+- **Logging:** Python logging with centralized configuration
+- **Data Processing:** Pandas for CSV handling, scikit-learn for ML models
 
 ---
 
@@ -361,6 +457,55 @@ Required environment variables (in `.env` file):
 - `DB_NAME` - Database name
 - `DB_USER` - Database user
 - `DB_PASSWORD` - Database password
-- `JWT_SECRET` - Secret key for JWT signing (change in production!)
+- `JWT_SECRET` - Secret key for JWT signing (REQUIRED - server will not start without it)
 - `JWT_ALGORITHM` - JWT algorithm (default: HS256)
 - `JWT_EXP_MINUTES` - Token expiration time in minutes (default: 60)
+
+**Important Notes:**
+- `DB_PORT` must be a valid integer (e.g., `5432`)
+- `JWT_SECRET` is required - the server will exit with a clear error message if missing
+- Database tables are automatically created on server startup
+- All database operations use proper transaction management with commit/rollback
+
+---
+
+## Model Name Format
+
+Model names follow a specific format to ensure uniqueness and ownership:
+
+**Auto-generated format:**
+```
+{user_id}_{model_type}_{YYYYMMDD}_{HHMMSS}_{microseconds}
+```
+
+**Example:**
+```
+3_knn_20260119_190735_140414
+```
+
+**Breakdown:**
+- `3` - User ID (from database)
+- `knn` - Model type (`knn` or `linear`)
+- `20260119` - Date (YYYYMMDD)
+- `190735` - Time (HHMMSS)
+- `140414` - Microseconds (ensures uniqueness within the same second)
+
+**Custom names:**
+- If you provide a custom `model_filename`, it's sanitized and prefixed with your user ID
+- Format: `{user_id}_{sanitized_filename}`
+- This ensures ownership and prevents conflicts
+
+---
+
+## Code Quality
+
+The codebase follows best practices:
+- ✅ Comprehensive error handling with proper HTTP status codes
+- ✅ Database transaction management (commit/rollback)
+- ✅ Input validation and sanitization
+- ✅ Centralized logging with concise format
+- ✅ Type hints throughout
+- ✅ Modular architecture with separation of concerns
+- ✅ Security best practices (password hashing, JWT, SQL injection prevention)
+
+For detailed code review findings, see `CODE_REVIEW.md`.

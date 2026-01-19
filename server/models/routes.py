@@ -3,6 +3,8 @@ Model training and prediction routes.
 """
 import json
 import logging
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -15,7 +17,8 @@ from server.config import TRAIN_MODELS_DIR
 from server.models.model_classes import MODEL_CLASSES
 from server.models.base_trainer import BaseTrainer
 from server.security.jwt_auth import get_current_user
-from server.users.repository import check_and_deduct_tokens
+from server.users.repository import check_and_deduct_tokens, get_user_id_by_email
+from server.models.repository import create_model_record, get_user_models, get_model_by_name
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +95,17 @@ async def get_models() -> Dict[str, Dict[str, Any]]:
 
 
 @router.get("/trained")
-async def get_trained_models() -> List[str]:
+async def get_trained_models(current_user: str = Depends(get_current_user)) -> List[str]:
     """
-    Returns the list of trained model filenames (without extensions/timestamps)
+    Returns the list of trained model names for the authenticated user.
+    Requires authentication.
     """
-    p = Path(TRAIN_MODELS_DIR)
-    if not p.exists():
-        return []
-    return [f.stem for f in p.glob("*.pkl")]
+    user_id = get_user_id_by_email(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    models = get_user_models(user_id)
+    return [model["model_name"] for model in models]
 
 
 @router.post("/create")
@@ -110,17 +116,25 @@ async def create_model(
     train_percentage: float = Form(0.8),
     csv_file: Optional[UploadFile] = File(None),
     optional_params: str = Form("{}"),
+    model_filename: Optional[str] = Form(None),
     current_user: str = Depends(get_current_user)
 ):
     """
     Train a new ML model.
     Requires authentication and deducts 1 token after validation passes.
+    
+    If model_filename is provided, it will be used (sanitized and prefixed with user_id).
+    If not provided, a unique name will be auto-generated with timestamp.
     """
     TRAINING_TOKEN_COST = 1
     
     # Validate inputs first
     if csv_file is None:
         raise HTTPException(status_code=400, detail="CSV file missing")
+    
+    # Validate train_percentage range
+    if not (0 < train_percentage < 1):
+        raise HTTPException(status_code=400, detail="train_percentage must be between 0 and 1")
 
     df = await run_in_threadpool(parse_csv, csv_file)
     feature_cols_list = parse_json_param(feature_cols, "feature_cols")
@@ -141,17 +155,45 @@ async def create_model(
     # All validations passed - now check and deduct tokens
     check_and_deduct_tokens(current_user, TRAINING_TOKEN_COST)
 
+    # Get user ID for model tracking
+    user_id = get_user_id_by_email(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Generate model name: use provided filename or auto-generate
+    if model_filename:
+        # Sanitize the provided filename
+        # Remove path separators and dangerous characters, keep only alphanumeric, underscore, hyphen
+        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', model_filename)
+        safe_name = safe_name.strip('_')  # Remove leading/trailing underscores
+        if not safe_name:
+            raise HTTPException(status_code=400, detail="Invalid model filename")
+        # Prefix with user_id to ensure uniqueness and ownership
+        model_name = f"{user_id}_{safe_name}"
+    else:
+        # Auto-generate unique name with timestamp (including microseconds for uniqueness)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        model_name = f"{user_id}_{model_type}_{timestamp}"
+
     # Initialize and train in threadpool (async safe)
     try:
-        trainer = trainer_cls(**valid_optional_params)
+        trainer = trainer_cls(model_name=model_name, **valid_optional_params)
         metrics = await run_in_threadpool(trainer.train, df, feature_cols_list, label_col, train_percentage)
+        
+        # Store model record in database
+        # Use full path for file_path to match where the model is actually saved
+        model_path = str(Path(TRAIN_MODELS_DIR) / f"{model_name}.pkl")
+        model_id = create_model_record(user_id, model_name, model_type, model_path)
+        if model_id is None:
+            logger.warning(f"Failed to create model record for {model_name}, but model was trained successfully")
+        
     except InvalidParameterError as e:
         raise HTTPException(status_code=400, detail=f"Invalid model parameter: {e}")
     except Exception as e:
         logger.exception("Training failed")
         raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
-    return {"status": "success", "metrics": metrics, "tokens_deducted": TRAINING_TOKEN_COST}
+    return {"status": "success", "model_name": model_name, "metrics": metrics, "tokens_deducted": TRAINING_TOKEN_COST}
 
 
 @router.post("/predict/{model_name}")
@@ -163,8 +205,21 @@ async def predict_model(
     """
     Make a prediction using a trained model.
     Requires authentication and deducts 5 tokens after validation passes.
+    Only allows prediction on models owned by the authenticated user.
     """
     PREDICTION_TOKEN_COST = 5
+    
+    # Get user ID and verify model ownership
+    user_id = get_user_id_by_email(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    model_record = get_model_by_name(user_id, model_name)
+    if model_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found or you don't have access to it"
+        )
     
     # Validate inputs first
     body = await request.json()
@@ -173,8 +228,8 @@ async def predict_model(
         raise HTTPException(status_code=400, detail="Missing 'features' in request body")
     optional_params = {k: v for k, v in body.items() if k != "features"}
 
-    # Infer model type
-    model_type = next((k for k in MODEL_CLASSES.keys() if model_name.lower().startswith(k)), None)
+    # Use model_type from database record
+    model_type = model_record["model_type"]
     trainer_cls = MODEL_CLASSES.get(model_type, BaseTrainer)
     
     # Validate optional parameters
@@ -188,7 +243,7 @@ async def predict_model(
         prediction = trainer.predict(features)
         return {"status": "success", "prediction": prediction, "tokens_deducted": PREDICTION_TOKEN_COST}
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Model not found: {model_name}")
+        raise HTTPException(status_code=404, detail=f"Model file not found: {model_name}")
     except Exception as e:
         logger.exception("Prediction failed")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")

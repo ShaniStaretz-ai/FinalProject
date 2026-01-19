@@ -28,9 +28,16 @@ def get_connection():
     _load_env()
     _validate_env()
 
+    # Convert port to integer as required by psycopg2
+    port_str = os.getenv("DB_PORT")
+    try:
+        port = int(port_str)
+    except (ValueError, TypeError):
+        raise RuntimeError(f"Invalid DB_PORT value: {port_str}. Must be a valid integer.")
+
     return connect(
         host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
+        port=port,
         dbname=os.getenv("DB_NAME"),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
