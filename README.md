@@ -371,7 +371,83 @@ Authorization: Bearer <your_access_token>
 }
 ```
 
-**Note:** You can only predict with models you own. The system verifies ownership before allowing prediction.
+**Example 1: Linear Regression Model (Predicting Bonus)**
+```http
+POST /predict/4_linear_20260127_231657_338986
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+{
+  "features": {
+    "age": 30,
+    "salary": 52000,
+    "city": "Los Angeles",
+    "hire_date": 1521504000
+  }
+}
+```
+
+**Example 2: KNN Model with Optional Parameters**
+```http
+POST /predict/4_knn_20260127_231750_030729
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+{
+  "features": {
+    "age": 35,
+    "salary": 61000,
+    "city": "Chicago",
+    "hire_date": 1499644800
+  },
+  "n_neighbors": 5,
+  "weights": "uniform"
+}
+```
+
+**Example 3: Prediction with Date Feature (Unix Timestamp)**
+```http
+POST /predict/4_linear_20260127_231657_338986
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+{
+  "features": {
+    "age": 28,
+    "salary": 45000,
+    "city": "New York",
+    "hire_date": 1581984000
+  }
+}
+```
+*Note: `hire_date` value `1581984000` is the Unix timestamp for `2020-02-18`*
+
+**Example Response:**
+```json
+{
+  "status": "success",
+  "prediction": 4200.50,
+  "tokens_deducted": 5
+}
+```
+
+**Feature Value Types:**
+- **Numeric features** (age, salary): Use numbers
+  - Example: `"age": 30`, `"salary": 52000`
+- **Categorical features** (city): Use strings matching training data
+  - Example: `"city": "New York"`, `"city": "Chicago"`, `"city": "Los Angeles"`
+  - Must match exactly (case-sensitive)
+- **Date features** (hire_date): Use Unix timestamps (integers)
+  - Example: `"hire_date": 1603324800` (represents `2020-10-22`)
+  - Convert dates to timestamps: `int(datetime(2020, 10, 22).timestamp())`
+  - In Streamlit client, date picker automatically converts to timestamp
+
+**Notes:** 
+- You can only predict with models you own. The system verifies ownership before allowing prediction.
+- Feature names must match exactly the columns used during training.
+- All features used during training must be provided in the prediction request.
+- Optional parameters (like `n_neighbors`, `weights` for KNN) are only used if the model type supports them.
+- Tokens are deducted after validation passes. No refund if prediction fails.
 
 #### Delete Model (Protected)
 ```http

@@ -116,6 +116,40 @@ def show_predict_tab(urls):
 
     st.subheader("Input Feature Values")
     
+    # Add examples expander
+    with st.expander("📖 See Examples", expanded=False):
+        st.markdown("""
+        **Example Prediction Values:**
+        
+        **For Numeric Features** (age, salary, etc.):
+        - Enter numbers: `30`, `52000`, `45.5`
+        - Example: `age: 30`, `salary: 52000`
+        
+        **For Categorical Features** (city, category, etc.):
+        - Enter text matching training data: `"New York"`, `"Chicago"`, `"Los Angeles"`
+        - Must match exactly (case-sensitive)
+        - Example: `city: New York`
+        
+        **For Date Features** (hire_date, start_date, etc.):
+        - Use the date picker (automatically converted to timestamp)
+        - Example: Select `2020-10-22` from the date picker
+        
+        **Complete Example:**
+        ```
+        Model trained with: ["age", "salary", "city", "hire_date"]
+        
+        Prediction inputs:
+        - age: 30
+        - salary: 52000
+        - city: Los Angeles
+        - hire_date: 2018-03-20 (selected from date picker)
+        
+        Result: Prediction value (e.g., 4200.50)
+        ```
+        
+        **Note:** All features used during training must be provided. The system will validate your inputs before making the prediction.
+        """)
+    
     if not feature_cols:
         st.info("ℹ️ **Note:** This model was trained before feature column tracking was added. Please enter the feature names and values manually based on what you used during training.")
         st.warning("⚠️ For future models, feature columns will be automatically detected.")
@@ -147,10 +181,19 @@ def show_predict_tab(urls):
                     features[col_name] = 0
             else:
                 # Try numeric input first, fallback to text
+                # Determine if it's likely numeric or categorical based on name
+                col_lower = col_name.lower()
+                if any(keyword in col_lower for keyword in ["age", "salary", "price", "amount", "count", "score", "rate", "percent"]):
+                    help_text = f"Enter a number (e.g., 30, 52000, 45.5)"
+                elif any(keyword in col_lower for keyword in ["city", "category", "type", "status", "name", "label"]):
+                    help_text = f"Enter text matching training data (e.g., 'New York', 'Chicago')"
+                else:
+                    help_text = "Enter a numeric value or text for categorical features"
+                
                 value = st.text_input(
                     f"{col_name}",
                     key=f"feat_{i}",
-                    help="Enter a numeric value or text for categorical features"
+                    help=help_text
                 )
                 if value:
                     try:
