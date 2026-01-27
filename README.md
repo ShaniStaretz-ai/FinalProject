@@ -38,13 +38,27 @@ A full-stack project to **train and predict Linear Regression models** via a RES
   - Automatic model ownership verification
 
 ### Client (Streamlit)
-- Upload CSV files and select feature/label columns dynamically
-- Prevent selection of all columns as features
-- Train models and visualize metrics
-- Predict using trained models with dynamic input fields
-- Display line plots for numeric features
-- Session state preserves data across tabs
-- Automatic reset when the file is removed
+- **Authentication UI:**
+  - User registration and login interface
+  - Password reset functionality
+  - Token balance display
+  - Authentication persists across page refreshes (using file-based cache)
+- **Model Training:**
+  - Upload CSV files and select feature/label columns dynamically
+  - Prevent selection of all columns as features
+  - Train models and visualize metrics
+  - Support for multiple model types (Linear Regression, KNN)
+  - Optional parameter configuration
+  - Custom model naming
+- **Model Prediction:**
+  - Dynamic model selection (only your trained models)
+  - Automatic feature input fields based on training data
+  - Support for numeric, categorical, and date features
+  - Real-time prediction with token deduction display
+- **Model Management:**
+  - View all your trained models
+  - Delete models with confirmation dialog
+  - Model details including feature columns used during training
 
 ---
 
@@ -75,10 +89,16 @@ FinalProject/
 │ │ ├─ connection.py            # Database connection
 │ │ ├─ schema.py                # Database schema
 │ │ └─ init_db.py               # Database initialization
-│ └─ train_models/              # Saved trained models
+│ ├─ train_models/              # Saved trained models (.pkl files)
+│ ├─ metrics/                   # Model metrics (.json files)
+│ └─ logs/                      # Application logs
 ├─ client/
 │ ├─ app.py                     # Streamlit app
 │ ├─ config.py                  # Client configuration
+│ ├─ auth.py                    # Authentication helpers
+│ ├─ components/                # Custom components
+│ │ ├─ __init__.py
+│ │ └─ auth_restore.py
 │ └─ tabs/
 │   ├─ train_tab.py             # Train Model tab
 │   └─ predict_tab.py           # Predict tab
@@ -233,6 +253,27 @@ Content-Type: application/json
 
 **Note:** Users cannot delete their own account. They can only delete other users' accounts.
 
+#### Reset Password
+```http
+POST /user/reset_password
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "new_password": "new_password123"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Password updated successfully. Please log in with your new password."
+}
+```
+
+**Note:** This endpoint allows password reset without authentication. In production, consider adding email verification or admin-only access.
+
 ### Model Training & Prediction Endpoints
 
 #### Get Available Models
@@ -246,13 +287,31 @@ GET /trained
 Authorization: Bearer <your_access_token>
 ```
 
-**Response:** Returns only models owned by the authenticated user
+**Response:** Returns only models owned by the authenticated user whose files exist on disk
 ```json
 [
   "3_knn_20260119_190735_140414",
   "3_linear_20260119_185500_123456"
 ]
 ```
+
+#### Get Model Details (Protected)
+```http
+GET /trained/{model_name}
+Authorization: Bearer <your_access_token>
+```
+
+**Response:** Returns detailed information about a specific model
+```json
+{
+  "model_name": "3_knn_20260119_190735_140414",
+  "model_type": "knn",
+  "feature_cols": ["age", "salary", "city", "hire_date"],
+  "created_at": "2026-01-19T19:07:35.140414+00:00"
+}
+```
+
+**Note:** Only returns models owned by the authenticated user. Used by the client to display correct feature input fields.
 
 #### Train Model (Protected)
 ```http
@@ -314,6 +373,25 @@ Authorization: Bearer <your_access_token>
 
 **Note:** You can only predict with models you own. The system verifies ownership before allowing prediction.
 
+#### Delete Model (Protected)
+```http
+DELETE /delete/{model_name}
+Authorization: Bearer <your_access_token>
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Model '3_knn_20260119_190735_140414' deleted successfully"
+}
+```
+
+**Note:** 
+- Only allows deletion of models owned by the authenticated user
+- Deletes both the database record and associated files (.pkl and _metrics.json) from disk
+- This action cannot be undone
+
 ---
 
 ## Using Swagger UI
@@ -343,9 +421,15 @@ streamlit run app.py
 
 2. **Access the client:** http://localhost:8501
 
-3. **Tabs:**
+3. **Authentication:**
+   - **Login/Register Tabs:** Create account or log in to get JWT token
+   - **Reset Password Tab:** Reset your password if you're having trouble logging in
+   - **Token Display:** See your current token balance
+   - **Auto-restore:** Authentication persists across page refreshes using file-based cache
+
+4. **Tabs:**
    - **Tab 1: Train Model** - Upload CSV, select features, train models
-   - **Tab 2: Predict** - Use trained models to make predictions
+   - **Tab 2: Predict** - Use trained models to make predictions with automatic feature detection
 
 ---
 
@@ -404,11 +488,22 @@ streamlit run app.py
 
 ### Notes
 
-- **Model Ownership:** Each model is associated with the user who created it
-- **Model Names:** Auto-generated names include user ID, model type, and timestamp with microseconds for uniqueness
+- **Model Ownership:** Each model is associated with the user who created it. Users can only access, predict with, and delete their own models.
+- **Model Names:** 
+  - Auto-generated: `{user_id}_{model_type}_{YYYYMMDD}_{HHMMSS}_{microseconds}`
+  - Custom names are sanitized and prefixed with user_id for security
+- **Model Storage:**
+  - Models are saved to `server/train_models/{model_name}.pkl`
+  - Metrics are saved to `server/metrics/{model_name}_metrics.json`
+  - Model metadata (including feature columns) is stored in the database
+- **Feature Columns Tracking:**
+  - Feature columns used during training are stored in the database
+  - The predict page automatically displays input fields for the exact features used
+  - Older models (trained before this feature) will show manual input fallback
 - **Token System:** 
-  - Training costs 1 token
-  - Prediction costs 5 tokens
+  - Training costs 1 token (deducted after validation passes)
+  - Prediction costs 5 tokens (deducted after validation passes)
+  - Tokens are refunded if training fails (but not if prediction fails)
   - Check your balance with `/user/tokens`
 - **Data Preprocessing:**
   - Dates are converted to Unix timestamps automatically
@@ -416,11 +511,24 @@ streamlit run app.py
   - Numeric columns are passed through as-is
 - **Input Formats:**
   - `feature_cols` can be sent as JSON array: `["age", "salary"]`
-  - Or as comma-separated string: `"age,salary"`
-- **Passwords:** Must be at least 4 characters (max 72 bytes due to bcrypt limit)
-- **JWT Tokens:** Expire after 60 minutes (configurable via `JWT_EXP_MINUTES`)
-- **Database:** Tables are automatically created on server startup
-- **Logging:** Concise logs with format: `HH:MM:SS | LEVEL | Module | Message`
+  - Or as comma-separated string: `"age,salary"` (fallback for compatibility)
+- **Passwords:** 
+  - Must be at least 4 characters (max 72 bytes due to bcrypt limit)
+  - Passwords are hashed using bcrypt with automatic truncation
+  - Password reset available via `/user/reset_password` endpoint
+- **JWT Tokens:** 
+  - Expire after 60 minutes (configurable via `JWT_EXP_MINUTES`)
+  - Tokens are stored in browser localStorage and local file cache
+  - Authentication persists across page refreshes (file-based cache in `~/.streamlit_auth_cache/`)
+- **Database:** 
+  - Tables are automatically created on server startup
+  - `ml_user` table: stores user accounts and tokens
+  - `ml_model` table: stores model metadata including feature columns
+  - Foreign key constraints ensure data integrity
+- **Logging:** 
+  - Concise logs with format: `HH:MM:SS | LEVEL | Module | Message`
+  - Logs are written to both console and `server/logs/app.log`
+  - Prevents duplicate log messages
 
 ---
 
@@ -430,21 +538,45 @@ streamlit run app.py
 - **JWT Tokens:** Secure token-based authentication using PyJWT
 - **Protected Endpoints:** User-specific data access with ownership verification
 - **Database Transactions:** Proper commit/rollback handling
-- **Model Ownership:** Users can only access, train, and predict with their own models
-- **Input Validation:** Comprehensive validation for all inputs
-- **Path Traversal Protection:** Model names are sanitized to prevent directory traversal
+- **Model Ownership:** 
+  - Users can only access, train, predict with, and delete their own models
+  - Ownership is verified on every model operation
+  - Model names are prefixed with user_id to ensure uniqueness
+- **Input Validation:** 
+  - Comprehensive validation for all inputs
+  - Type conversion for optional parameters
+  - CSV file size limits (50MB max)
+  - Feature column validation
+- **Path Traversal Protection:** 
+  - Model names are sanitized to prevent directory traversal
+  - Only alphanumeric, underscore, and hyphen characters allowed
 - **SQL Injection Prevention:** All queries use parameterized statements
+- **Authentication Persistence:** 
+  - Tokens stored in browser localStorage
+  - File-based cache for reliable restoration across refreshes
+  - Cache location: `~/.streamlit_auth_cache/auth_token.json`
 
 ---
 
 ## Technologies Used
 
-- **Backend:** FastAPI, PyJWT, bcrypt, PostgreSQL, scikit-learn, pandas, joblib
-- **Frontend:** Streamlit
+- **Backend:** 
+  - FastAPI (web framework)
+  - PyJWT (JWT token management)
+  - bcrypt (password hashing)
+  - PostgreSQL (database)
+  - psycopg2-binary (PostgreSQL adapter)
+  - scikit-learn (machine learning)
+  - pandas (data processing)
+  - joblib (model serialization)
+- **Frontend:** 
+  - Streamlit (web application framework)
+  - requests (HTTP client)
 - **Database:** PostgreSQL with psycopg2 (connection pooling recommended for production)
 - **Authentication:** JWT tokens with HTTPBearer
 - **Logging:** Python logging with centralized configuration
 - **Data Processing:** Pandas for CSV handling, scikit-learn for ML models
+- **Storage:** File-based authentication cache for persistence
 
 ---
 
