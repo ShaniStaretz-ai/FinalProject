@@ -3,10 +3,65 @@ from tabs import train_tab, predict_tab
 from config import build_urls, DEFAULT_API_BASE_URL
 from auth import is_authenticated, login, register, logout, get_user_tokens, reset_password, _restore_from_storage, _init_session_state
 
-# Initialize and restore authentication FIRST, before any other code
+# Initialize session state FIRST
 _init_session_state()
-if not st.session_state.get("auth_restored", False):
-    _restore_from_storage()
+
+# Try to restore from query params (set by JavaScript on reload)
+restored = False
+try:
+    query_params = st.query_params
+    if "auth_token" in query_params and "user_email" in query_params:
+        token = query_params.get("auth_token")
+        email = query_params.get("user_email")
+        if token and email:
+            st.session_state.auth_token = token
+            st.session_state.user_email = email
+            st.session_state.auth_restored = True
+            restored = True
+            # Clear query params from URL
+            new_params = {k: v for k, v in query_params.items() 
+                         if k not in ["auth_token", "user_email", "auth_restored"]}
+            st.query_params = new_params
+except Exception:
+    pass
+
+# If not restored and no token in session, inject JavaScript to restore
+# This will only run on the first page load (when there are no query params)
+if not restored and not st.session_state.get("auth_token"):
+    # Only inject script if we don't have query params (first load after refresh)
+    if "auth_token" not in st.query_params:
+        # Inject script that runs immediately and sets query params, then reloads
+        restore_js = """
+        <script>
+            // Run immediately, don't wait for DOM
+            (function() {
+                try {
+                    if (typeof(Storage) !== "undefined") {
+                        const token = localStorage.getItem("auth_token");
+                        const email = localStorage.getItem("user_email");
+                        if (token && email) {
+                            const currentUrl = window.location.href;
+                            const url = new URL(currentUrl);
+                            // Only proceed if auth_token is not already in URL
+                            if (!url.searchParams.has("auth_token")) {
+                                url.searchParams.set("auth_token", encodeURIComponent(token));
+                                url.searchParams.set("user_email", encodeURIComponent(email));
+                                url.searchParams.set("auth_restored", "1");
+                                // Update URL without reload first
+                                window.history.replaceState({}, "", url.toString());
+                                // Then reload to let Streamlit read the params
+                                window.location.reload();
+                            }
+                        }
+                    }
+                } catch(e) {
+                    console.error("Auth restore error:", e);
+                }
+            })();
+        </script>
+        """
+        # Use markdown with unsafe_allow_html to inject early
+        st.markdown(restore_js, unsafe_allow_html=True)
 
 # Sidebar
 st.sidebar.header("API Settings")
@@ -21,6 +76,21 @@ urls = build_urls(api_base_url)
 
 # Authentication Section
 st.sidebar.header("Authentication")
+
+# Note about page refresh behavior
+if not is_authenticated() and st.session_state.get("show_refresh_note", True):
+    with st.sidebar.expander("ℹ️ About Page Refresh", expanded=False):
+        st.info("""
+        **Note:** Full page refreshes (F5) will log you out due to Streamlit's architecture.
+        
+        To stay logged in:
+        - Use Streamlit's built-in rerun (interact with widgets)
+        - Avoid pressing F5 or refreshing the browser
+        - Your login is saved in browser storage and will auto-restore when possible
+        """)
+        if st.button("Don't show again", key="hide_refresh_note"):
+            st.session_state.show_refresh_note = False
+            st.rerun()
 
 if is_authenticated():
     user_email = st.session_state.get("user_email", "Unknown")

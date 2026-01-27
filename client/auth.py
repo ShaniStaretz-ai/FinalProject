@@ -3,7 +3,14 @@ Authentication helper functions for the Streamlit client.
 """
 import streamlit as st
 import requests
+import json
+import os
+from pathlib import Path
 from typing import Optional, Dict, Tuple
+
+# Cache file for authentication token (persists across page refreshes)
+CACHE_DIR = Path.home() / ".streamlit_auth_cache"
+CACHE_FILE = CACHE_DIR / "auth_token.json"
 
 
 def _init_session_state():
@@ -21,11 +28,20 @@ def _init_session_state():
 
 def _save_token_to_storage(token: str, email: str):
     """
-    Save authentication token to session state and browser localStorage.
+    Save authentication token to session state, browser localStorage, and local file cache.
     This ensures tokens persist across page refreshes.
     """
     st.session_state.auth_token = token
     st.session_state.user_email = email
+    
+    # Save to local file cache (persists across refreshes)
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CACHE_FILE, 'w') as f:
+            json.dump({"auth_token": token, "user_email": email}, f)
+    except Exception as e:
+        # File cache is optional, don't fail if it doesn't work
+        pass
     
     # Save to browser localStorage via JavaScript
     # Escape the token and email for JavaScript
@@ -45,11 +61,26 @@ def _save_token_to_storage(token: str, email: str):
 
 def _restore_from_storage():
     """
-    Restore authentication token from browser localStorage on page load.
+    Restore authentication token from local file cache, query params, or browser localStorage.
     This is called once per session to restore authentication after a page refresh.
     """
     if not st.session_state.get("auth_restored", False):
-        # Try to get token from query parameters (set by JavaScript on previous load)
+        # First, try to restore from local file cache (fastest, no JavaScript needed)
+        try:
+            if CACHE_FILE.exists():
+                with open(CACHE_FILE, 'r') as f:
+                    cache_data = json.load(f)
+                    token = cache_data.get("auth_token")
+                    email = cache_data.get("user_email")
+                    if token and email:
+                        st.session_state.auth_token = token
+                        st.session_state.user_email = email
+                        st.session_state.auth_restored = True
+                        return
+        except Exception:
+            pass
+        
+        # Second, try to get token from query parameters (set by JavaScript on previous load)
         try:
             query_params = st.query_params
             if "auth_token" in query_params and "user_email" in query_params:
@@ -58,61 +89,46 @@ def _restore_from_storage():
                 if token and email:
                     st.session_state.auth_token = token
                     st.session_state.user_email = email
+                    # Save to file cache for next time
+                    try:
+                        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                        with open(CACHE_FILE, 'w') as f:
+                            json.dump({"auth_token": token, "user_email": email}, f)
+                    except Exception:
+                        pass
                     # Clear query params after restoring to avoid showing them in URL
                     new_params = {k: v for k, v in query_params.items() 
                                  if k not in ["auth_token", "user_email", "auth_restored"]}
                     st.query_params = new_params
                     st.session_state.auth_restored = True
-                    # Clear the sessionStorage flag so it can work again if needed
-                    js_clear = """
-                    <script>
-                        if (typeof(Storage) !== "undefined") {
-                            sessionStorage.removeItem("auth_restore_attempted");
-                        }
-                    </script>
-                    """
-                    st.components.v1.html(js_clear, height=0)
                     return
-        except Exception as e:
-            # Query params might not be available or accessible
+        except Exception:
             pass
         
-        # If not restored from query params, inject JavaScript to read from localStorage
+        # Third, if not restored, inject JavaScript to read from localStorage
         # and set query params for next rerun
         if st.session_state.auth_token is None:
             js_code = """
             <script>
                 (function() {
-                    // Check if we've already tried to restore (prevent infinite loop)
-                    if (sessionStorage.getItem("auth_restore_attempted") === "true") {
-                        return; // Already attempted, don't try again
-                    }
-                    
                     if (typeof(Storage) !== "undefined") {
                         const token = localStorage.getItem("auth_token");
                         const email = localStorage.getItem("user_email");
                         if (token && email) {
                             const url = new URL(window.location);
-                            // Only restore if not already in URL and not already attempted
-                            if (!url.searchParams.has("auth_token") && !url.searchParams.has("auth_restored")) {
-                                sessionStorage.setItem("auth_restore_attempted", "true");
+                            if (!url.searchParams.has("auth_token")) {
                                 url.searchParams.set("auth_token", encodeURIComponent(token));
                                 url.searchParams.set("user_email", encodeURIComponent(email));
                                 url.searchParams.set("auth_restored", "true");
                                 window.history.replaceState({}, "", url);
-                                // Force a page reload to ensure Streamlit picks up the query params
                                 window.location.reload();
                             }
-                        } else {
-                            // No token in localStorage, mark as attempted to prevent further checks
-                            sessionStorage.setItem("auth_restore_attempted", "true");
                         }
                     }
                 })();
             </script>
-            <div style="display:none;"></div>
             """
-            st.components.v1.html(js_code, height=0)
+            st.markdown(js_code, unsafe_allow_html=True)
         
         st.session_state.auth_restored = True
 
@@ -212,13 +228,20 @@ def register(email: str, password: str, api_base_url: str) -> Tuple[bool, str]:
 
 def logout():
     """
-    Clear authentication token from session state and browser localStorage.
+    Clear authentication token from session state, browser localStorage, and file cache.
     """
     _init_session_state()
     
     st.session_state.auth_token = None
     st.session_state.user_email = None
     st.session_state.auth_restored = False
+    
+    # Clear from local file cache
+    try:
+        if CACHE_FILE.exists():
+            os.remove(CACHE_FILE)
+    except Exception:
+        pass
     
     # Clear from browser localStorage and sessionStorage
     js_code = """
