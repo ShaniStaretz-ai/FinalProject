@@ -65,11 +65,21 @@ def validate_user(email: str, pwd: str) -> Optional[dict]:
             logger.warning(f"User not found: {email}")
             return None
             
-        if verify_password(pwd, user["pwd"]):  # centralized helper
+        # Debug: Check hash format
+        stored_hash = user["pwd"]
+        if not stored_hash or len(stored_hash) < 10:
+            logger.error(f"Invalid password hash stored for user {email}: hash too short or empty")
+            return None
+        
+        if not stored_hash.startswith('$2'):
+            logger.error(f"Invalid password hash format for user {email}: hash doesn't start with $2 (got: {stored_hash[:10]}...)")
+            return None
+        
+        if verify_password(pwd, stored_hash):  # centralized helper
             logger.info(f"User {email} authenticated successfully")
             return user
         else:
-            logger.warning(f"Password verification failed for user: {email}")
+            logger.warning(f"Password verification failed for user: {email} (hash format looks valid: {stored_hash[:20]}...)")
             return None
     except Exception as e:
         logger.error(f"Error validating user {email}: {e}")
@@ -185,6 +195,36 @@ def get_user_tokens(email: str) -> Optional[int]:
     except Exception as e:
         logger.error(f"Error fetching tokens for {email}: {e}")
         return None
+
+def update_user_password(email: str, new_password: str) -> bool:
+    """
+    Update a user's password. Returns True if updated, False otherwise.
+    """
+    try:
+        pwd_hashed = hash_password(new_password)
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ml_user SET pwd=%s WHERE email=%s RETURNING id",
+                    (pwd_hashed, email)
+                )
+                updated = cur.rowcount
+                conn.commit()
+                if updated > 0:
+                    logger.info(f"Password updated for user: {email}")
+                    return True
+                return False
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Error updating password for {email}: {e}")
+            raise
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error updating password for {email}: {e}")
+        return False
+
 
 def update_user_tokens(email: str, new_tokens: int) -> bool:
     """

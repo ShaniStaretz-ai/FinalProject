@@ -3,12 +3,12 @@ Model training and prediction routes.
 """
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-import pandas as pd
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Depends, status
 from fastapi.concurrency import run_in_threadpool
 from sklearn.utils._param_validation import InvalidParameterError
@@ -16,71 +16,16 @@ from sklearn.utils._param_validation import InvalidParameterError
 from server.config import TRAIN_MODELS_DIR
 from server.models.model_classes import MODEL_CLASSES
 from server.models.base_trainer import BaseTrainer
+from server.models.helpers import parse_csv, parse_json_param, validate_optional_params
 from server.security.jwt_auth import get_current_user
-from server.users.repository import check_and_deduct_tokens, get_user_id_by_email
-from server.models.repository import create_model_record, get_user_models, get_model_by_name
+from server.users.repository import check_and_deduct_tokens, get_user_id_by_email, get_user_tokens, update_user_tokens
+from server.models.repository import create_model_record, get_user_models, get_model_by_name, delete_model
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     tags=["models"]
 )
-
-# -----------------------------
-# Helper functions
-# -----------------------------
-def parse_csv(upload_file: UploadFile) -> pd.DataFrame:
-    """
-    Reads an uploaded CSV file and returns a pandas DataFrame.
-    Raises HTTPException on errors.
-    """
-    try:
-        contents = upload_file.file.read()
-        if not contents:
-            raise HTTPException(status_code=400, detail="CSV file is empty")
-        # Reset pointer in case file is read again
-        upload_file.file.seek(0)
-        df = pd.read_csv(upload_file.file)
-        if df.empty:
-            raise HTTPException(status_code=400, detail="CSV file has no data")
-        return df
-    except pd.errors.EmptyDataError:
-        raise HTTPException(status_code=400, detail="CSV file is empty")
-    except Exception as e:
-        logger.exception("Failed to read CSV")
-        raise HTTPException(status_code=500, detail=f"Failed to read CSV: {e}")
-
-def parse_json_param(param: str, param_name: str) -> Any:
-    """
-    Parses a JSON string parameter and raises HTTPException if invalid.
-    For 'feature_cols', also accepts comma-separated string format as fallback.
-    """
-    try:
-        return json.loads(param)
-    except json.JSONDecodeError:
-        # Special handling for feature_cols: accept comma-separated string
-        if param_name == "feature_cols":
-            # Try to parse as comma-separated string
-            if isinstance(param, str) and not param.startswith('['):
-                # Split by comma and strip whitespace
-                return [col.strip() for col in param.split(',') if col.strip()]
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid JSON in parameter '{param_name}'. Expected JSON format (e.g., [\"age\",\"salary\"] for feature_cols)"
-        )
-
-def validate_optional_params(trainer_cls, params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Filters the optional parameters to include only valid keys defined in trainer_cls.OPTIONAL_PARAMS.
-    """
-    allowed_params = getattr(trainer_cls, "OPTIONAL_PARAMS", {})
-    invalid_keys = [k for k in params.keys() if k not in allowed_params]
-    if invalid_keys:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid optional parameter(s): {invalid_keys}"
-        )
-    return {k: params[k] for k in params if k in allowed_params}
 
 
 # -----------------------------
@@ -98,6 +43,7 @@ async def get_models() -> Dict[str, Dict[str, Any]]:
 async def get_trained_models(current_user: str = Depends(get_current_user)) -> List[str]:
     """
     Returns the list of trained model names for the authenticated user.
+    Only returns models whose files actually exist on disk.
     Requires authentication.
     """
     user_id = get_user_id_by_email(current_user)
@@ -105,7 +51,126 @@ async def get_trained_models(current_user: str = Depends(get_current_user)) -> L
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
     models = get_user_models(user_id)
-    return [model["model_name"] for model in models]
+    # Filter to only include models whose files exist
+    valid_model_names = []
+    for model in models:
+        file_path = model.get("file_path")
+        if file_path and os.path.exists(file_path):
+            valid_model_names.append(model["model_name"])
+        else:
+            logger.warning(f"Model {model['model_name']} has database record but file not found at {file_path}")
+    
+    logger.info(f"User {current_user} retrieved {len(valid_model_names)} trained model(s) (out of {len(models)} in database)")
+    return valid_model_names
+
+
+@router.get("/trained/{model_name}")
+async def get_model_details(
+    model_name: str,
+    current_user: str = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    Get detailed information about a specific trained model, including feature columns.
+    Requires authentication and model ownership.
+    """
+    user_id = get_user_id_by_email(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Sanitize model_name to prevent path traversal
+    safe_model_name = re.sub(r'[^a-zA-Z0-9_-]', '', model_name)
+    if safe_model_name != model_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model name: contains illegal characters"
+        )
+    
+    model_record = get_model_by_name(user_id, safe_model_name)
+    if model_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found or you don't have access to it"
+        )
+    
+    # Verify file exists
+    file_path = model_record.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model file not found for '{model_name}'"
+        )
+    
+    # Parse feature_cols from JSON string
+    feature_cols_str = model_record.get("feature_cols")
+    feature_cols = []
+    
+    if feature_cols_str:
+        # Handle empty string, None, or invalid JSON
+        feature_cols_str = feature_cols_str.strip()
+        if feature_cols_str and feature_cols_str != '':
+            try:
+                feature_cols = json.loads(feature_cols_str)
+                # Ensure it's a list
+                if not isinstance(feature_cols, list):
+                    feature_cols = []
+            except (json.JSONDecodeError, TypeError):
+                feature_cols = []
+    
+    # Log if feature_cols is empty (for debugging)
+    if not feature_cols:
+        logger.warning(f"Model {model_name} has no feature_cols stored (may be an older model)")
+    
+    return {
+        "model_name": model_record["model_name"],
+        "model_type": model_record["model_type"],
+        "feature_cols": feature_cols,
+        "created_at": str(model_record["created_at"])
+    }
+
+
+@router.delete("/delete/{model_name}")
+async def delete_model_endpoint(
+    model_name: str,
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Delete a trained model by name.
+    Requires authentication and only allows deletion of models owned by the authenticated user.
+    Deletes both the database record and associated files from disk.
+    """
+    # Sanitize model_name to prevent path traversal
+    safe_model_name = re.sub(r'[^a-zA-Z0-9_-]', '', model_name)
+    if safe_model_name != model_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model name: contains illegal characters"
+        )
+    
+    # Get user ID and verify model ownership
+    user_id = get_user_id_by_email(current_user)
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    
+    # Verify model exists and belongs to user
+    model_record = get_model_by_name(user_id, model_name)
+    if model_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{model_name}' not found or you don't have access to it"
+        )
+    
+    # Delete the model (database record and files)
+    logger.info(f"User {current_user} (ID: {user_id}) deleting model: {model_name}")
+    success = delete_model(user_id, model_name)
+    if not success:
+        logger.error(f"Model deletion failed: {model_name} for user {user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete model '{model_name}'"
+        )
+    
+    logger.info(f"Model deleted successfully: {model_name} by user {current_user}")
+    return {"status": "success", "message": f"Model '{model_name}' deleted successfully"}
 
 
 @router.post("/create")
@@ -140,6 +205,10 @@ async def create_model(
     feature_cols_list = parse_json_param(feature_cols, "feature_cols")
     optional_params_dict = parse_json_param(optional_params, "optional_params")
 
+    # Validate feature_cols_list is not empty
+    if not feature_cols_list or len(feature_cols_list) == 0:
+        raise HTTPException(status_code=400, detail="feature_cols cannot be empty")
+
     # Validate columns
     missing_cols = [c for c in feature_cols_list + [label_col] if c not in df.columns]
     if missing_cols:
@@ -152,10 +221,7 @@ async def create_model(
     trainer_cls = MODEL_CLASSES[model_type]
     valid_optional_params = validate_optional_params(trainer_cls, optional_params_dict)
 
-    # All validations passed - now check and deduct tokens
-    check_and_deduct_tokens(current_user, TRAINING_TOKEN_COST)
-
-    # Get user ID for model tracking
+    # Get user ID for model tracking (before token deduction)
     user_id = get_user_id_by_email(current_user)
     if user_id is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -175,6 +241,12 @@ async def create_model(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         model_name = f"{user_id}_{model_type}_{timestamp}"
 
+    # All validations passed - now check and deduct tokens
+    # Tokens are deducted here, but if training fails, we'll need to refund them
+    logger.info(f"Starting model training: {model_name} (type: {model_type}, user: {current_user})")
+    check_and_deduct_tokens(current_user, TRAINING_TOKEN_COST)
+    tokens_deducted = True
+
     # Initialize and train in threadpool (async safe)
     try:
         trainer = trainer_cls(model_name=model_name, **valid_optional_params)
@@ -183,17 +255,45 @@ async def create_model(
         # Store model record in database
         # Use full path for file_path to match where the model is actually saved
         model_path = str(Path(TRAIN_MODELS_DIR) / f"{model_name}.pkl")
-        model_id = create_model_record(user_id, model_name, model_type, model_path)
+        
+        # Verify model file was actually saved
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file was not saved to expected path: {model_path}")
+        
+        # Store feature_cols as JSON string
+        feature_cols_json = json.dumps(feature_cols_list)
+        model_id = create_model_record(user_id, model_name, model_type, model_path, feature_cols_json)
         if model_id is None:
             logger.warning(f"Failed to create model record for {model_name}, but model was trained successfully")
         
+        logger.info(f"Model training completed: {model_name} (R²={metrics['r2_score']:.3f}, user: {current_user}, saved to: {model_path})")
+        
     except InvalidParameterError as e:
+        # Refund tokens if training fails due to invalid parameters
+        if tokens_deducted:
+            current_tokens = get_user_tokens(current_user)
+            if current_tokens is not None:
+                update_user_tokens(current_user, current_tokens + TRAINING_TOKEN_COST)
+                logger.info(f"Refunded {TRAINING_TOKEN_COST} tokens to {current_user} due to training failure")
         raise HTTPException(status_code=400, detail=f"Invalid model parameter: {e}")
     except Exception as e:
+        # Refund tokens if training fails
+        if tokens_deducted:
+            current_tokens = get_user_tokens(current_user)
+            if current_tokens is not None:
+                update_user_tokens(current_user, current_tokens + TRAINING_TOKEN_COST)
+                logger.info(f"Refunded {TRAINING_TOKEN_COST} tokens to {current_user} due to training failure")
         logger.exception("Training failed")
         raise HTTPException(status_code=500, detail=f"Training failed: {e}")
 
-    return {"status": "success", "model_name": model_name, "metrics": metrics, "tokens_deducted": TRAINING_TOKEN_COST}
+    return {
+        "status": "success",
+        "model_name": model_name,
+        "metrics": metrics,
+        "tokens_deducted": TRAINING_TOKEN_COST,
+        "file_path": model_path,
+        "saved_location": "server/train_models folder"
+    }
 
 
 @router.post("/predict/{model_name}")
@@ -208,6 +308,15 @@ async def predict_model(
     Only allows prediction on models owned by the authenticated user.
     """
     PREDICTION_TOKEN_COST = 5
+    
+    # Sanitize model_name to prevent path traversal
+    # Model names should only contain alphanumeric, underscore, hyphen, and match the pattern user_id_*
+    safe_model_name = re.sub(r'[^a-zA-Z0-9_-]', '', model_name)
+    if safe_model_name != model_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model name: contains illegal characters"
+        )
     
     # Get user ID and verify model ownership
     user_id = get_user_id_by_email(current_user)
@@ -236,13 +345,16 @@ async def predict_model(
     valid_optional_params = validate_optional_params(trainer_cls, optional_params)
 
     # All validations passed - now check and deduct tokens
+    logger.info(f"Prediction request: model={model_name}, user={current_user}, features={len(features)}")
     check_and_deduct_tokens(current_user, PREDICTION_TOKEN_COST)
 
     trainer = trainer_cls(model_name=model_name, **valid_optional_params)
     try:
         prediction = trainer.predict(features)
+        logger.info(f"Prediction successful: model={model_name}, user={current_user}, prediction={prediction:.4f}")
         return {"status": "success", "prediction": prediction, "tokens_deducted": PREDICTION_TOKEN_COST}
     except FileNotFoundError:
+        logger.exception("Prediction failed: model file not found")
         raise HTTPException(status_code=404, detail=f"Model file not found: {model_name}")
     except Exception as e:
         logger.exception("Prediction failed")

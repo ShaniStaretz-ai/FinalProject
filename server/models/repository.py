@@ -11,18 +11,25 @@ from server.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
-def create_model_record(user_id: int, model_name: str, model_type: str, file_path: str) -> Optional[int]:
+def create_model_record(user_id: int, model_name: str, model_type: str, file_path: str, feature_cols: str) -> Optional[int]:
     """
     Create a model record in the database.
     Returns the model ID on success, None on error.
+    
+    Args:
+        user_id: User ID who owns the model
+        model_name: Name of the model
+        model_type: Type of model (e.g., "linear", "knn")
+        file_path: Full path to the model file
+        feature_cols: JSON string of feature columns used for training
     """
     try:
         conn = get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO ml_model (user_id, model_name, model_type, file_path) VALUES (%s, %s, %s, %s) RETURNING id",
-                    (user_id, model_name, model_type, file_path)
+                    "INSERT INTO ml_model (user_id, model_name, model_type, file_path, feature_cols) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (user_id, model_name, model_type, file_path, feature_cols)
                 )
                 model_id = cur.fetchone()[0]
                 conn.commit()
@@ -53,7 +60,7 @@ def get_user_models(user_id: int) -> List[Dict]:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, model_name, model_type, file_path, created_at FROM ml_model WHERE user_id=%s ORDER BY created_at DESC",
+                    "SELECT id, model_name, model_type, file_path, feature_cols, created_at FROM ml_model WHERE user_id=%s ORDER BY created_at DESC",
                     (user_id,)
                 )
                 models = cur.fetchall()
@@ -75,7 +82,7 @@ def get_model_by_name(user_id: int, model_name: str) -> Optional[Dict]:
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT id, model_name, model_type, file_path, created_at FROM ml_model WHERE user_id=%s AND model_name=%s",
+                    "SELECT id, model_name, model_type, file_path, feature_cols, created_at FROM ml_model WHERE user_id=%s AND model_name=%s",
                     (user_id, model_name)
                 )
                 model = cur.fetchone()
@@ -89,10 +96,37 @@ def get_model_by_name(user_id: int, model_name: str) -> Optional[Dict]:
 
 def delete_model(user_id: int, model_name: str) -> bool:
     """
-    Delete a model record for a user.
+    Delete a model record for a user and its associated files from disk.
     Returns True if deleted, False if not found.
     """
+    import os
+    from server.config import METRICS_DIR
+    
     try:
+        # First, get the model record to find the file path
+        model_record = get_model_by_name(user_id, model_name)
+        if model_record is None:
+            return False
+        
+        # Delete model file from disk
+        file_path = model_record.get("file_path")
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Deleted model file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete model file {file_path}: {e}")
+        
+        # Delete metrics file from disk
+        metrics_path = os.path.join(METRICS_DIR, f"{model_name}_metrics.json")
+        if os.path.exists(metrics_path):
+            try:
+                os.remove(metrics_path)
+                logger.info(f"Deleted metrics file: {metrics_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete metrics file {metrics_path}: {e}")
+        
+        # Now delete the database record
         conn = get_connection()
         try:
             with conn.cursor() as cur:

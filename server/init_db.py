@@ -11,6 +11,13 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute(ML_USER_TABLE_SQL)
             cur.execute(ML_MODEL_TABLE_SQL)
+            
+            # Add feature_cols column if it doesn't exist (migration)
+            try:
+                cur.execute("ALTER TABLE ml_model ADD COLUMN IF NOT EXISTS feature_cols TEXT DEFAULT ''")
+            except Exception as e:
+                logger.warning(f"Could not add feature_cols column (may already exist): {e}")
+            
         conn.commit()
         logger.info("Database initialized")
     finally:

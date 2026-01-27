@@ -1,9 +1,13 @@
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from datetime import datetime, timedelta, timezone
 import jwt
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from server.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXP_MINUTES
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # HTTPBearer for FastAPI / Swagger - allows direct token input
@@ -26,6 +30,7 @@ def create_jwt(email: str, expires_minutes: int = JWT_EXP_MINUTES) -> str:
         "iat": now
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    logger.debug(f"JWT token created for: {email} (expires in {expires_minutes} minutes)")
     return token
 
 def decode_jwt(token: str) -> str:
@@ -37,22 +42,27 @@ def decode_jwt(token: str) -> str:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         email = payload.get("sub")
         if email is None:
+            logger.warning("JWT token validation failed: missing subject")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing subject"
             )
+        logger.debug(f"JWT token validated for: {email}")
         return email
     except ExpiredSignatureError:
+        logger.warning("JWT token validation failed: token expired")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired"
         )
     except InvalidTokenError as e:
+        logger.warning(f"JWT token validation failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {str(e)}"
         )
     except Exception as e:
+        logger.error(f"JWT token validation error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token validation error: {str(e)}"

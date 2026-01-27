@@ -2,12 +2,18 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
+from auth import is_authenticated, get_auth_headers
 
 def show_train_tab(urls):
     API_CREATE_URL = urls["CREATE"]
     API_MODELS_URL = urls["MODELS"]
 
     st.header("Train Model")
+
+    # Check authentication
+    if not is_authenticated():
+        st.warning("⚠️ Please log in to train models.")
+        return
 
     # -----------------------------
     # Upload CSV
@@ -95,10 +101,22 @@ def show_train_tab(urls):
             }
 
             with st.spinner("Training model..."):
-                response = requests.post(API_CREATE_URL, data=data, files=files)
+                headers = get_auth_headers()
+                response = requests.post(
+                    API_CREATE_URL,
+                    data=data,
+                    files=files,
+                    headers=headers
+                )
 
-            if response.ok:
-                st.success("Model training started successfully!")
-                st.json(response.json())
+            if response.status_code == 200:
+                result = response.json()
+                st.success("✅ Model training completed successfully!")
+                st.json(result)
+                tokens_deducted = result.get("tokens_deducted", 0)
+                if tokens_deducted:
+                    st.info(f"Tokens deducted: {tokens_deducted}")
+            elif response.status_code == 401:
+                st.error("Authentication failed. Please log in again.")
             else:
                 st.error(f"Training failed: {response.text}")

@@ -59,10 +59,25 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Uses the same truncation logic as hash_password for consistency.
     """
     try:
+        # Validate inputs
+        if not plain_password or not hashed_password:
+            logger.warning("Password verification: empty password or hash")
+            return False
+        
+        # Check if hash looks valid (bcrypt hashes start with $2a$, $2b$, or $2y$)
+        if not hashed_password.startswith('$2'):
+            logger.warning(f"Password verification: invalid hash format (doesn't start with $2)")
+            return False
+        
         # Truncate to 72 bytes to match hash_password behavior
         password_bytes = _truncate_to_bytes(plain_password, max_bytes=72)
         hashed_bytes = hashed_password.encode('utf-8')
-        return bcrypt.checkpw(password_bytes, hashed_bytes)
+        result = bcrypt.checkpw(password_bytes, hashed_bytes)
+        
+        if not result:
+            logger.debug(f"Password verification failed: bcrypt.checkpw returned False")
+        
+        return result
     except Exception as e:
-        logger.error(f"Password verification error: {e}")
+        logger.error(f"Password verification error: {e}", exc_info=True)
         return False

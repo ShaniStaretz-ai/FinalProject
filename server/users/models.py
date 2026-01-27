@@ -21,3 +21,7 @@ class TokenResponse(BaseModel):
 
 class UserDeleteRequest(BaseModel):
     user_id: int
+
+class UserPasswordUpdateRequest(BaseModel):
+    email: EmailStr
+    new_password: str = Field(min_length=4, max_length=72)
