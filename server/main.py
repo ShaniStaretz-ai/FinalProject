@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 try:
     from server.users.routes import router as user_router
     from server.models.routes import router as models_router
+    from server.admin.routes import router as admin_router
     from server.init_db import init_db
 except RuntimeError as e:
     if "JWT_SECRET" in str(e):
@@ -48,6 +49,7 @@ app = FastAPI(title="Trainer API", version="1.0.0")
 # Include routers
 app.include_router(user_router)
 app.include_router(models_router)
+app.include_router(admin_router)
 
 
 # -----------------------------

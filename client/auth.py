@@ -28,13 +28,13 @@ def _init_session_state():
 
 def _save_token_to_storage(token: str, email: str):
     """
-    Save authentication token to session state, browser localStorage, and local file cache.
-    This ensures tokens persist across page refreshes.
+    Save authentication token to session state and local file cache.
+    The file cache persists across page refreshes (server-side, no JavaScript needed).
     """
     st.session_state.auth_token = token
     st.session_state.user_email = email
     
-    # Save to local file cache (persists across refreshes)
+    # Save to local file cache (persists across refreshes on server side)
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         with open(CACHE_FILE, 'w') as f:
@@ -42,30 +42,17 @@ def _save_token_to_storage(token: str, email: str):
     except Exception as e:
         # File cache is optional, don't fail if it doesn't work
         pass
-    
-    # Save to browser localStorage via JavaScript
-    # Escape the token and email for JavaScript
-    safe_token = token.replace('"', '\\"').replace("'", "\\'")
-    safe_email = email.replace('"', '\\"').replace("'", "\\'")
-    
-    js_code = f"""
-    <script>
-        if (typeof(Storage) !== "undefined") {{
-            localStorage.setItem("auth_token", "{safe_token}");
-            localStorage.setItem("user_email", "{safe_email}");
-        }}
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
 
 
 def _restore_from_storage():
     """
-    Restore authentication token from local file cache, query params, or browser localStorage.
+    Restore authentication token from local file cache (server-side, no JavaScript needed).
     This is called once per session to restore authentication after a page refresh.
+    The file cache persists across browser refreshes on the server side.
     """
     if not st.session_state.get("auth_restored", False):
-        # First, try to restore from local file cache (fastest, no JavaScript needed)
+        # Restore from local file cache (server-side, no JavaScript needed)
+        # This file persists across page refreshes
         try:
             if CACHE_FILE.exists():
                 with open(CACHE_FILE, 'r') as f:
@@ -79,56 +66,6 @@ def _restore_from_storage():
                         return
         except Exception:
             pass
-        
-        # Second, try to get token from query parameters (set by JavaScript on previous load)
-        try:
-            query_params = st.query_params
-            if "auth_token" in query_params and "user_email" in query_params:
-                token = query_params["auth_token"]
-                email = query_params["user_email"]
-                if token and email:
-                    st.session_state.auth_token = token
-                    st.session_state.user_email = email
-                    # Save to file cache for next time
-                    try:
-                        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                        with open(CACHE_FILE, 'w') as f:
-                            json.dump({"auth_token": token, "user_email": email}, f)
-                    except Exception:
-                        pass
-                    # Clear query params after restoring to avoid showing them in URL
-                    new_params = {k: v for k, v in query_params.items() 
-                                 if k not in ["auth_token", "user_email", "auth_restored"]}
-                    st.query_params = new_params
-                    st.session_state.auth_restored = True
-                    return
-        except Exception:
-            pass
-        
-        # Third, if not restored, inject JavaScript to read from localStorage
-        # and set query params for next rerun
-        if st.session_state.auth_token is None:
-            js_code = """
-            <script>
-                (function() {
-                    if (typeof(Storage) !== "undefined") {
-                        const token = localStorage.getItem("auth_token");
-                        const email = localStorage.getItem("user_email");
-                        if (token && email) {
-                            const url = new URL(window.location);
-                            if (!url.searchParams.has("auth_token")) {
-                                url.searchParams.set("auth_token", encodeURIComponent(token));
-                                url.searchParams.set("user_email", encodeURIComponent(email));
-                                url.searchParams.set("auth_restored", "true");
-                                window.history.replaceState({}, "", url);
-                                window.location.reload();
-                            }
-                        }
-                    }
-                })();
-            </script>
-            """
-            st.markdown(js_code, unsafe_allow_html=True)
         
         st.session_state.auth_restored = True
 
@@ -228,7 +165,7 @@ def register(email: str, password: str, api_base_url: str) -> Tuple[bool, str]:
 
 def logout():
     """
-    Clear authentication token from session state, browser localStorage, and file cache.
+    Clear authentication token from session state and file cache.
     """
     _init_session_state()
     
@@ -242,18 +179,6 @@ def logout():
             os.remove(CACHE_FILE)
     except Exception:
         pass
-    
-    # Clear from browser localStorage and sessionStorage
-    js_code = """
-    <script>
-        if (typeof(Storage) !== "undefined") {
-            localStorage.removeItem("auth_token");
-            localStorage.removeItem("user_email");
-            sessionStorage.removeItem("auth_restore_attempted");
-        }
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
 
 
 def reset_password(email: str, new_password: str, api_base_url: str) -> Tuple[bool, str]:
@@ -310,4 +235,28 @@ def get_user_tokens(api_base_url: str) -> Optional[int]:
         return None
     except Exception:
         return None
+
+
+def is_admin(api_base_url: str) -> bool:
+    """
+    Check if the current user is an admin by attempting to access admin endpoint.
+    
+    Args:
+        api_base_url: Base URL for the API
+    
+    Returns:
+        True if user is admin, False otherwise.
+    """
+    if not is_authenticated():
+        return False
+    
+    try:
+        headers = get_auth_headers()
+        response = requests.get(
+            f"{api_base_url}/admin/users",
+            headers=headers
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
 

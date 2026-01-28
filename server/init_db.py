@@ -18,6 +18,12 @@ def init_db():
             except Exception as e:
                 logger.warning(f"Could not add feature_cols column (may already exist): {e}")
             
+            # Add is_admin column if it doesn't exist (migration)
+            try:
+                cur.execute("ALTER TABLE ml_user ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            except Exception as e:
+                logger.warning(f"Could not add is_admin column (may already exist): {e}")
+            
         conn.commit()
         logger.info("Database initialized")
     finally:

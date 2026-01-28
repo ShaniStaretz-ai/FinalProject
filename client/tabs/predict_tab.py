@@ -206,7 +206,9 @@ def show_predict_tab(urls):
                     features[col_name] = None
 
     optional_params = {}
-    if model_name and model_name.lower().startswith("knn"):
+    # Check model_type from model_details instead of model_name
+    # Model names follow format: {user_id}_{model_type}_{timestamp}, so we can't use startswith
+    if model_details and model_details.get("model_type") == "knn":
         optional_params["n_neighbors"] = st.number_input("n_neighbors (KNN)", 1, 50, 5)
         optional_params["weights"] = st.selectbox("weights (KNN)", ["uniform", "distance"])
 

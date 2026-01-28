@@ -25,3 +25,9 @@ class UserDeleteRequest(BaseModel):
 class UserPasswordUpdateRequest(BaseModel):
     email: EmailStr
     new_password: str = Field(min_length=4, max_length=72)
+
+
+class AddTokensRequest(BaseModel):
+    email: EmailStr
+    credit_card: str
+    amount: int = Field(gt=0, description="Amount of tokens to add (must be positive)")

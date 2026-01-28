@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS ml_user (
     id SERIAL PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     pwd TEXT NOT NULL CHECK (char_length(pwd) >= 4),
-    tokens INTEGER NOT NULL DEFAULT 0
+    tokens INTEGER NOT NULL DEFAULT 0,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE
 );
 """
 

@@ -12,23 +12,32 @@ logger = logging.getLogger(__name__)
 # ----------------------------
 # User management
 # ----------------------------
-def create_user(email: str, pwd: str, tokens: int = 15) -> bool:
+def create_user(email: str, pwd: str, tokens: int = 15, is_admin: bool = False) -> bool:
     """
     Create a new user with hashed password and initial tokens.
     Returns True on success, False if user already exists or error occurs.
+    If this is the first user, they will be set as admin automatically.
     """
     try:
         pwd_hashed = hash_password(pwd)  # centralized helper
         conn = get_connection()
         try:
             with conn.cursor() as cur:
+                # Check if this is the first user (no users exist)
+                cur.execute("SELECT COUNT(*) FROM ml_user")
+                user_count = cur.fetchone()[0]
+                # First user is automatically admin
+                if user_count == 0:
+                    is_admin = True
+                    logger.info(f"First user created - setting as admin: {email}")
+                
                 cur.execute(
-                    "INSERT INTO ml_user (email, pwd, tokens) VALUES (%s, %s, %s) RETURNING id",
-                    (email, pwd_hashed, tokens)
+                    "INSERT INTO ml_user (email, pwd, tokens, is_admin) VALUES (%s, %s, %s, %s) RETURNING id",
+                    (email, pwd_hashed, tokens, is_admin)
                 )
                 new_id = cur.fetchone()[0]
                 conn.commit()  # Explicitly commit the transaction
-                logger.info(f"Created user {email} with ID {new_id}")
+                logger.info(f"Created user {email} with ID {new_id} (admin: {is_admin})")
             return True
         except psycopg2.IntegrityError as e:
             # User already exists (unique constraint violation)
@@ -280,3 +289,71 @@ def check_and_deduct_tokens(email: str, required_tokens: int) -> bool:
     
     logger.info(f"User {email}: Deducted {required_tokens} tokens. Remaining: {new_tokens}")
     return True
+
+
+# ----------------------------
+# Admin functions
+# ----------------------------
+def is_user_admin(email: str) -> bool:
+    """
+    Check if a user is an admin. Returns True if admin, False otherwise.
+    """
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT is_admin FROM ml_user WHERE email=%s", (email,))
+                row = cur.fetchone()
+                if row:
+                    return bool(row[0])
+                return False
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error checking admin status for {email}: {e}")
+        return False
+
+
+def get_all_users(min_tokens: Optional[int] = None) -> list:
+    """
+    Get all users. If min_tokens is provided, filter users with at least that many tokens.
+    Returns list of dicts with user info.
+    """
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if min_tokens is not None:
+                    cur.execute(
+                        "SELECT id, email, tokens, is_admin FROM ml_user WHERE tokens >= %s ORDER BY id",
+                        (min_tokens,)
+                    )
+                else:
+                    cur.execute("SELECT id, email, tokens, is_admin FROM ml_user ORDER BY id")
+                users = cur.fetchall()
+                return [dict(user) for user in users]
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error fetching all users: {e}")
+        return []
+
+
+def add_tokens_to_user(email: str, amount: int) -> bool:
+    """
+    Add tokens to a user's account. Returns True if successful, False otherwise.
+    """
+    try:
+        current_tokens = get_user_tokens(email)
+        if current_tokens is None:
+            logger.warning(f"User not found: {email}")
+            return False
+        
+        new_tokens = current_tokens + amount
+        success = update_user_tokens(email, new_tokens)
+        if success:
+            logger.info(f"Added {amount} tokens to {email}. New balance: {new_tokens}")
+        return success
+    except Exception as e:
+        logger.error(f"Error adding tokens to {email}: {e}")
+        return False
