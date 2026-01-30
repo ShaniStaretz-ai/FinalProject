@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, D
 from fastapi.concurrency import run_in_threadpool
 from sklearn.utils._param_validation import InvalidParameterError
 
-from server.config import TRAIN_MODELS_DIR
+from server.config import TRAIN_MODELS_DIR, METRICS_DIR
 from server.ml import MODEL_CLASSES
 from server.ml.base_trainer import BaseTrainer
 from server.ml.helpers import parse_csv, parse_json_param, validate_optional_params
@@ -176,6 +176,7 @@ async def create_model(
         model_name = f"{user_id}_{model_type}_{timestamp}"
     logger.info(f"Starting model training: {model_name} (type: {model_type}, user: {current_user})")
     tokens_deducted = False
+    model_path = None
     try:
         check_and_deduct_tokens(current_user, TRAINING_TOKEN_COST)
         tokens_deducted = True
@@ -198,16 +199,53 @@ async def create_model(
         )
         
     except HTTPException:
+        if tokens_deducted and model_path and os.path.exists(model_path):
+            try:
+                os.remove(model_path)
+                logger.info(f"Removed orphaned model file: {model_path}")
+            except OSError as err:
+                logger.warning(f"Could not remove orphaned model file {model_path}: {err}")
+            metrics_path = os.path.join(METRICS_DIR, f"{model_name}_metrics.json")
+            if os.path.exists(metrics_path):
+                try:
+                    os.remove(metrics_path)
+                    logger.info(f"Removed orphaned metrics file: {metrics_path}")
+                except OSError as err:
+                    logger.warning(f"Could not remove orphaned metrics file {metrics_path}: {err}")
         if tokens_deducted:
             if refund_tokens(current_user, TRAINING_TOKEN_COST):
                 logger.info(f"Refunded {TRAINING_TOKEN_COST} tokens to {current_user} due to training failure")
         raise
     except InvalidParameterError as e:
+        if tokens_deducted and model_path and os.path.exists(model_path):
+            try:
+                os.remove(model_path)
+                logger.info(f"Removed orphaned model file: {model_path}")
+            except OSError as err:
+                logger.warning(f"Could not remove orphaned model file {model_path}: {err}")
+            metrics_path = os.path.join(METRICS_DIR, f"{model_name}_metrics.json")
+            if os.path.exists(metrics_path):
+                try:
+                    os.remove(metrics_path)
+                except OSError:
+                    pass
         if tokens_deducted:
             if refund_tokens(current_user, TRAINING_TOKEN_COST):
                 logger.info(f"Refunded {TRAINING_TOKEN_COST} tokens to {current_user} due to training failure")
         raise HTTPException(status_code=400, detail=f"Invalid model parameter: {e}")
     except Exception as e:
+        if tokens_deducted and model_path and os.path.exists(model_path):
+            try:
+                os.remove(model_path)
+                logger.info(f"Removed orphaned model file: {model_path}")
+            except OSError as err:
+                logger.warning(f"Could not remove orphaned model file {model_path}: {err}")
+            metrics_path = os.path.join(METRICS_DIR, f"{model_name}_metrics.json")
+            if os.path.exists(metrics_path):
+                try:
+                    os.remove(metrics_path)
+                except OSError:
+                    pass
         if tokens_deducted:
             if refund_tokens(current_user, TRAINING_TOKEN_COST):
                 logger.info(f"Refunded {TRAINING_TOKEN_COST} tokens to {current_user} due to training failure")
