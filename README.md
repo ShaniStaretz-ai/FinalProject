@@ -1,28 +1,43 @@
-# Final Project: ML Training & Prediction Platform
+# ML Training & Prediction Platform — Final Project
+
+**AI Developer Course · Final Project Submission**
 
 **Author:** Shani Staretz
 
-Full-stack platform to **train and run predictions** with multiple ML model types via a REST API and Streamlit client.
+---
 
-- **Server:** FastAPI with JWT auth, token-based usage, and admin API.
-- **Client:** Streamlit app for auth, training, prediction, and (for admins) user management.
+## Abstract
+
+This project is a **full-stack ML platform** for training and running predictions with multiple machine-learning model types. It demonstrates REST API design, authentication and authorization, database-backed user and model management, and a modern Streamlit client—submitted as the final project for the AI Developer course.
+
+Users register, receive tokens, and spend them to **train** models (Linear Regression, KNN, Logistic Regression, Random Forest) from CSV data and to **run predictions** with their trained models. Admins can manage users and token balances. All ML operations and user data are persisted via PostgreSQL with JWT-secured APIs.
 
 ---
 
 ## Features
 
 ### Server (FastAPI)
-- **Authentication:** Registration, login (JWT), password reset, bcrypt hashing (72-byte safe).
-- **Tokens:** New users get 15 tokens; training costs 1, prediction costs 5; balance at `/user/tokens`.
-- **Models:** Train **Linear Regression**, **KNN**, **Logistic Regression**, and **Random Forest** from CSV; optional params per type; metrics (R², MSE, MAE) logged and returned.
-- **Prediction:** Use your trained models only; ownership checked on every call.
-- **Admin:** List users, add tokens, reset password, delete user (admin-only).
+- **Authentication:** Registration, login (JWT), authenticated password reset, bcrypt hashing (72-byte safe).
+- **Tokens:** New users get 15 tokens; training costs 1, prediction costs 5; balance at `/user/tokens`. Atomic add/deduct to avoid lost updates under concurrency.
+- **Models:** Train **Linear Regression**, **KNN**, **Logistic Regression**, and **Random Forest** from CSV; optional hyperparameters per type; metrics (R², MSE, MAE) saved and returned.
+- **Prediction:** Use only your trained models; ownership checked on every call; token deduction is atomic.
+- **Admin:** List users (optional filter by min tokens), add tokens, reset user password, delete user (admin-only; cannot delete self).
 
 ### Client (Streamlit)
 - **Auth:** Login / Register / Reset password in sidebar; token count; session restored from file cache; 401 → logout and rerun.
-- **Train:** Upload CSV, choose features/label, model type, optional params; train and see metrics (R², MSE, MAE) when done.
-- **Predict:** Select model (friendly labels with type and date), fill features, run prediction; delete model with confirmation.
-- **Admin (if admin user):** Filter users by token count; add tokens, reset password, delete user per user.
+- **Train:** Upload CSV, choose features/label, model type, optional params; train and see metrics (R², MSE, MAE).
+- **Predict:** Select model (friendly labels with type and date), fill feature values (with legacy-model and empty-value handling), run prediction; delete model with confirmation.
+- **Admin (if admin user):** Filter users by token count; add tokens, reset password, delete user per user; action selectbox kept in sync when options change (e.g. current user has no “Delete”).
+
+---
+
+## Technologies
+
+| Layer        | Stack |
+|-------------|--------|
+| **Backend** | FastAPI, PyJWT, bcrypt, PostgreSQL (psycopg2, connection pool), scikit-learn, pandas, joblib |
+| **Frontend**| Streamlit, requests |
+| **Config**  | python-dotenv; server `config.py`; client `API_BASE_URL` and `build_urls()` |
 
 ---
 
@@ -31,23 +46,23 @@ Full-stack platform to **train and run predictions** with multiple ML model type
 ```
 FinalProject/
 ├── server/
-│   ├── main.py              # FastAPI app, register_routers, startup
-│   ├── config.py            # Env config (JWT, DB, paths)
+│   ├── main.py              # FastAPI app, register_routers, startup (init_db)
+│   ├── config.py            # Env (JWT, DB, paths)
 │   ├── logging.py           # Logging setup and get_logger
-│   ├── init_db.py           # Create DB tables on startup
+│   ├── init_db.py           # Create tables; bootstrap admin if ADMIN_EMAIL/PASSWORD set
 │   ├── api/
 │   │   └── __init__.py      # register_routers(app)
 │   ├── admin/
 │   │   └── routes.py        # Admin endpoints
 │   ├── users/
 │   │   ├── routes.py        # User endpoints
-│   │   ├── repository.py    # User DB operations
+│   │   ├── repository.py    # User DB (atomic token ops)
 │   │   └── models.py        # Pydantic request/response
-│   ├── models/              # “Trained model” resource
+│   ├── models/              # Trained model resource
 │   │   ├── routes.py        # Create, predict, list, delete
 │   │   └── repository.py    # Model records + file paths
 │   ├── ml/                  # Machine learning (no HTTP/DB)
-│   │   ├── base_trainer.py
+│   │   ├── base_trainer.py  # Train/predict pipeline
 │   │   ├── helpers.py       # CSV parse, optional params
 │   │   ├── model_classes.py # MODEL_CLASSES registry
 │   │   ├── knn_model.py
@@ -59,27 +74,25 @@ FinalProject/
 │   │   ├── admin_auth.py
 │   │   └── passwords.py
 │   ├── db/
-│   │   ├── connection.py    # Connection pool (config from config.py)
+│   │   ├── connection.py    # Connection pool
 │   │   └── schema.py        # Table definitions
 │   ├── train_models/        # Saved .pkl files
 │   ├── metrics/             # Per-model metrics .json
 │   └── logs/                # app.log
 ├── client/
-│   ├── app.py               # Streamlit entry, tabs
+│   ├── app.py               # Streamlit entry, tabs (Train, Predict, Admin if admin)
 │   ├── config.py            # API base URL (env API_BASE_URL)
 │   ├── api.py               # All HTTP calls to server
 │   ├── auth.py              # Session, cache, login/logout, 401 handling
 │   ├── components/
-│   │   ├── __init__.py
 │   │   └── auth_header.py   # Sidebar auth UI
 │   └── tabs/
 │       ├── train_tab.py
 │       ├── predict_tab.py
 │       └── admin_tab.py
+├── data/                    # Sample CSVs (e.g. user_decision_classification, health_lifestyle)
 ├── requirements.txt
 ├── .env                     # Create this (see below)
-├── ARCHITECTURE.md          # Layering and package roles
-├── CODE_REVIEW.md           # Code review notes
 └── README.md
 ```
 
@@ -123,7 +136,7 @@ FinalProject/
    JWT_ALGORITHM=HS256
    JWT_EXP_MINUTES=60
 
-   # Optional: bootstrap one admin user when DB has no admins (run at startup)
+   # Optional: bootstrap one admin when DB has no admins (at server startup)
    ADMIN_EMAIL=admin@example.com
    ADMIN_PASSWORD=your-admin-password-min-4-chars
    ```
@@ -135,7 +148,7 @@ FinalProject/
 
 ## Running the Project
 
-**From the project root** (so `server` and `client` resolve correctly):
+From the **project root**:
 
 1. **Start the API server**
    ```bash
@@ -151,55 +164,55 @@ FinalProject/
    ```
    - App: http://localhost:8501  
 
-**Client API URL:** By default the client uses `http://127.0.0.1:8000`. Override with the env var `API_BASE_URL` (e.g. for another host/port).
+**Client API URL:** Default is `http://127.0.0.1:8000`. Override with env var `API_BASE_URL`.
 
 ---
 
 ## API Endpoints (Summary)
 
-| Area        | Method | Endpoint                    | Auth   | Description              |
-|------------|--------|-----------------------------|--------|--------------------------|
-| Users      | POST   | `/user/create`              | No     | Register                 |
-| Users      | POST   | `/user/login`               | No     | Login, get JWT            |
-| Users      | GET    | `/user/tokens`             | Bearer | Get token balance        |
-| Users      | POST   | `/user/reset_password`     | No     | Reset password           |
-| Users      | DELETE | `/user/remove_user`       | Bearer | Delete another user      |
-| Models     | GET    | `/models`                  | No     | List model types + params |
-| Models     | GET    | `/trained`                 | Bearer | List your trained models |
-| Models     | GET    | `/trained/{model_name}`    | Bearer | Model details + feature_cols |
-| Models     | POST   | `/create`                  | Bearer | Train model (1 token)    |
-| Models     | POST   | `/predict/{model_name}`    | Bearer | Predict (5 tokens)       |
-| Models     | DELETE | `/delete/{model_name}`     | Bearer | Delete model             |
-| Admin      | GET    | `/admin/users`             | Admin  | List users (optional min_tokens) |
-| Admin      | POST   | `/admin/users/{id}/tokens` | Admin  | Add tokens to user       |
-| Admin      | POST   | `/admin/users/{id}/reset_password` | Admin | Reset user password |
-| Admin      | DELETE | `/admin/users/{id}`        | Admin  | Delete user              |
+| Area   | Method | Endpoint                          | Auth   | Description                    |
+|--------|--------|-----------------------------------|--------|--------------------------------|
+| Users  | POST   | `/user/create`                    | No     | Register                       |
+| Users  | POST   | `/user/login`                     | No     | Login, get JWT                 |
+| Users  | GET    | `/user/tokens`                    | Bearer | Get token balance              |
+| Users  | POST   | `/user/reset_password`            | Bearer | Reset own password             |
+| Users  | DELETE | `/user/remove_user`               | Bearer | Delete another user            |
+| Models | GET    | `/models`                         | No     | List model types + params      |
+| Models | GET    | `/trained`                        | Bearer | List your trained models       |
+| Models | GET    | `/trained/{model_name}`           | Bearer | Model details + feature_cols   |
+| Models | POST   | `/create`                         | Bearer | Train model (1 token)          |
+| Models | POST   | `/predict/{model_name}`           | Bearer | Predict (5 tokens)             |
+| Models | DELETE | `/delete/{model_name}`            | Bearer | Delete model                   |
+| Admin  | GET    | `/admin/users`                    | Admin  | List users (optional min_tokens) |
+| Admin  | POST   | `/admin/users/{id}/tokens`        | Admin  | Add tokens to user             |
+| Admin  | POST   | `/admin/users/{id}/reset_password`| Admin  | Reset user password            |
+| Admin  | DELETE | `/admin/users/{id}`               | Admin  | Delete user                    |
 
 **Auth:** Send JWT in header: `Authorization: Bearer <token>`.
 
 **Train** (multipart/form-data): `model_type`, `feature_cols` (JSON array or comma-separated), `label_col`, `train_percentage`, `csv_file`, `optional_params` (JSON), optional `model_filename`.
 
-**Predict** (JSON body): `{"features": {"col1": value, ...}}`; optional params (e.g. KNN `n_neighbors`, `weights`) if supported.
+**Predict** (JSON body): `{"features": {"col1": value, ...}}`.
 
 ---
 
 ## Environment Variables
 
-| Variable        | Required | Description |
-|----------------|----------|-------------|
-| `DB_HOST`      | Yes*     | PostgreSQL host (default: localhost) |
-| `DB_PORT`      | No       | Port (default: 5432) |
-| `DB_NAME`      | Yes*     | Database name |
-| `DB_USER`      | Yes*     | Database user |
-| `DB_PASSWORD`  | Yes*     | Database password |
-| `JWT_SECRET`   | **Yes**  | JWT signing key (server exits if missing) |
-| `JWT_ALGORITHM`| No       | Default: HS256 |
-| `JWT_EXP_MINUTES` | No    | Default: 60 |
-| `ADMIN_EMAIL`     | No    | Bootstrap admin email (created at startup if no admin exists) |
-| `ADMIN_PASSWORD`  | No    | Bootstrap admin password (min 4 chars; use with ADMIN_EMAIL) |
-| `API_BASE_URL` | No (client) | Server URL for client (default: http://127.0.0.1:8000) |
+| Variable         | Required | Description |
+|------------------|----------|-------------|
+| `DB_HOST`       | Yes*     | PostgreSQL host (default: localhost) |
+| `DB_PORT`       | No       | Port (default: 5432) |
+| `DB_NAME`       | Yes*     | Database name |
+| `DB_USER`       | Yes*     | Database user |
+| `DB_PASSWORD`    | Yes*     | Database password |
+| `JWT_SECRET`    | **Yes**  | JWT signing key (server exits if missing) |
+| `JWT_ALGORITHM` | No       | Default: HS256 |
+| `JWT_EXP_MINUTES` | No     | Default: 60 |
+| `ADMIN_EMAIL`   | No       | Bootstrap admin email (when no admin exists) |
+| `ADMIN_PASSWORD`| No       | Bootstrap admin password (min 4 chars) |
+| `API_BASE_URL`  | No (client) | Server URL (default: http://127.0.0.1:8000) |
 
-\* DB vars are required for the app to work; missing DB_NAME/DB_USER will cause connection to fail.
+\* DB vars required for the app; missing `DB_NAME`/`DB_USER` will cause connection to fail.
 
 ---
 
@@ -212,32 +225,35 @@ FinalProject/
 | logistic       | `C` (float), `max_iter` (int), `solver` (str) |
 | random_forest  | `n_estimators`, `max_depth`, `min_samples_split`, `min_samples_leaf` |
 
-Model names: auto `{user_id}_{model_type}_{timestamp}` or custom `{user_id}_{sanitized_name}`.
+Model names: auto `{user_id}_{model_type}_{timestamp}` or custom; feature columns stored for prediction UI.
 
 ---
 
-## Security and Behavior
+## Security and Robustness
 
 - **Passwords:** bcrypt, min length 4, 72-byte truncation.
-- **JWT:** HS256, exp/iat; invalid/expired → generic “Invalid token” to client; details only in server logs.
+- **JWT:** HS256, exp/iat; invalid/expired → generic “Invalid token” to client.
 - **Ownership:** Models tied to `user_id`; list/predict/delete only your models.
-- **Admin:** One admin can be created at startup via `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` (when no admin exists yet). Admin routes require an admin JWT.
-- **DB:** Parameterized queries; connection pool; atomic token deduction (single UPDATE with `tokens >= cost`).
-- **Paths:** Model names sanitized (alphanumeric, underscore, hyphen only).
-- **CSV:** Max 50MB; feature/label validation.
-
----
-
-## Technologies
-
-- **Backend:** FastAPI, PyJWT, bcrypt, PostgreSQL (psycopg2 + connection pool), scikit-learn, pandas, joblib.
-- **Frontend:** Streamlit, requests.
-- **Config:** python-dotenv; single `config.py` on server; client uses `API_BASE_URL` and `build_urls()`.
+- **Admin:** Bootstrap via `ADMIN_EMAIL`/`ADMIN_PASSWORD` when no admin exists; admin routes require admin JWT; admin cannot delete self.
+- **DB:** Parameterized queries; connection pool; **atomic** token add/deduct (single `UPDATE ... SET tokens = tokens ± amount`).
+- **Paths:** Model names sanitized; CSV max 50MB; feature/label validation.
 
 ---
 
 ## Code Quality and Architecture
 
-- Clear separation: **api** (routes) → **repositories** / **ml**; **config** and **db** used by repos and ml.
-- Client: **app** → **tabs** / **components** → **auth** + **api**; only **api.py** performs HTTP.
-- Error handling, validation, logging, type hints; see `CODE_REVIEW.md` and `ARCHITECTURE.md` for details.
+- **Server:** Clear separation: routes → repositories / ml; config and db used by repos and ml; atomic token operations in repository.
+- **Client:** app → tabs / components → auth + api; only `api.py` performs HTTP; session state kept consistent (e.g. admin action selectbox, legacy empty feature handling).
+- Error handling, validation, logging, and type hints used throughout.
+
+---
+
+## Deliverables (Final Project)
+
+- **Working application:** Server + client run as described; full auth, train, predict, and admin flows.
+- **Documentation:** This README (setup, run, API, env, security).
+- **Codebase:** Structured server and client with ML pipeline, DB, and security integrated.
+
+---
+
+**Shani Staretz · AI Developer Course · Final Project**
