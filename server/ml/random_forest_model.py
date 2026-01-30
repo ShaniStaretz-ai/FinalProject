@@ -1,5 +1,5 @@
 from sklearn.ensemble import RandomForestRegressor
-from server.models.base_trainer import BaseTrainer
+from server.ml.base_trainer import BaseTrainer
 
 
 class RandomForestModel(BaseTrainer):
@@ -14,7 +14,7 @@ class RandomForestModel(BaseTrainer):
         self,
         model_name: str = "random_forest",
         n_estimators: int = 100,
-        max_depth: int = 0,  # 0 means None (no limit) - converted in __init__
+        max_depth: int = 0,
         min_samples_split: int = 2,
         min_samples_leaf: int = 1,
         **kwargs,

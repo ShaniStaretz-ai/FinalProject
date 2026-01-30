@@ -7,10 +7,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_current_admin(current_user: str = Depends(get_current_user)) -> str:
-    """
-    Dependency to ensure the current user is an admin.
-    Use as: current_admin: str = Depends(get_current_admin)
-    """
     if not is_user_admin(current_user):
         logger.warning(f"Admin access denied for user: {current_user}")
         raise HTTPException(
@@ -19,4 +15,3 @@ def get_current_admin(current_user: str = Depends(get_current_user)) -> str:
         )
     logger.debug(f"Admin access granted for: {current_user}")
     return current_user
-

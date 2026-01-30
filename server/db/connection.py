@@ -1,44 +1,33 @@
-import os
-from psycopg2 import connect
-from dotenv import load_dotenv
-from pathlib import Path
+from psycopg2.pool import ThreadedConnectionPool
 
+from server.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
-_REQUIRED_VARS = [
-    "DB_HOST",
-    "DB_PORT",
-    "DB_NAME",
-    "DB_USER",
-    "DB_PASSWORD",
-]
-
-
-def _load_env():
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    load_dotenv(env_path)
-
-
-def _validate_env():
-    missing = [v for v in _REQUIRED_VARS if not os.getenv(v)]
-    if missing:
-        raise RuntimeError(f"Missing environment variables: {missing}")
+_pool: ThreadedConnectionPool | None = None
+_MIN_CONN = 1
+_MAX_CONN = 10
 
 
 def get_connection():
-    _load_env()
-    _validate_env()
+    global _pool
+    if _pool is None:
+        if not DB_NAME or not DB_USER:
+            raise RuntimeError("Missing DB_NAME or DB_USER. Set DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD in .env")
+        _pool = ThreadedConnectionPool(
+            _MIN_CONN,
+            _MAX_CONN,
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+        )
+    return _pool.getconn()
 
-    # Convert port to integer as required by psycopg2
-    port_str = os.getenv("DB_PORT")
-    try:
-        port = int(port_str)
-    except (ValueError, TypeError):
-        raise RuntimeError(f"Invalid DB_PORT value: {port_str}. Must be a valid integer.")
 
-    return connect(
-        host=os.getenv("DB_HOST"),
-        port=port,
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-    )
+def return_connection(conn):
+    global _pool
+    if _pool is not None and conn is not None:
+        try:
+            _pool.putconn(conn)
+        except Exception:
+            pass

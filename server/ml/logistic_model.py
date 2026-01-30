@@ -1,12 +1,8 @@
 from sklearn.linear_model import LogisticRegression
-from server.models.base_trainer import BaseTrainer
+from server.ml.base_trainer import BaseTrainer
 
 
 class LogisticModel(BaseTrainer):
-    """
-    Logistic Regression model (classification).
-    Uses BaseTrainer; metrics (R², MSE, MAE) are computed on class labels.
-    """
     OPTIONAL_PARAMS = {
         "C": "float",
         "max_iter": "int",

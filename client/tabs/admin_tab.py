@@ -1,30 +1,18 @@
 import streamlit as st
-import requests
 from auth import is_authenticated, get_auth_headers, is_admin, logout_and_rerun
-from config import DEFAULT_API_BASE_URL
+from api import admin_get_users, admin_add_tokens, admin_reset_password, admin_delete_user
 
-def show_admin_tab(urls):
-    # No need to preserve tab - we're on a separate page with its own URL
-    API_ADMIN_USERS = urls["ADMIN_USERS"]
-    API_ADMIN_ADD_TOKENS = urls["ADMIN_ADD_TOKENS"]
-    API_ADMIN_DELETE_USER = urls["ADMIN_DELETE_USER"]
-    API_ADMIN_RESET_PASSWORD = urls["ADMIN_RESET_PASSWORD"]
-    
+
+def show_admin_tab(urls, api_base_url: str):
     st.header("🔐 Admin Dashboard")
-    
-    # Check authentication
     if not is_authenticated():
         st.warning("⚠️ Please log in to access the admin dashboard.")
         return
-    
-    # Check admin status
-    if not is_admin(DEFAULT_API_BASE_URL):
+    if not is_admin(api_base_url):
         st.error("❌ Access Denied: Admin privileges required.")
         return
     
     st.success("✅ Admin access granted")
-    
-    # Filter for minimum tokens
     st.subheader("Filter Users")
     min_tokens = st.slider(
         "Show users with at least X tokens",
@@ -34,13 +22,10 @@ def show_admin_tab(urls):
         step=1,
         help="Set to 0 to show all users"
     )
-    
-    # Fetch users
     users = []
     try:
         headers = get_auth_headers()
-        params = {"min_tokens": min_tokens} if min_tokens > 0 else {}
-        response = requests.get(API_ADMIN_USERS, headers=headers, params=params)
+        response = admin_get_users(urls, headers, min_tokens if min_tokens > 0 else None)
         
         if response.status_code == 200:
             data = response.json()
@@ -62,8 +47,6 @@ def show_admin_tab(urls):
         return
     
     st.subheader(f"Users ({len(users)} found)")
-    
-    # Display users in a table
     for user in users:
         user_id = user.get("id")
         email = user.get("email")
@@ -84,34 +67,23 @@ def show_admin_tab(urls):
                 st.write(f"**Tokens:** {tokens}")
             
             with col4:
-                # Actions button to open popup
                 dialog_key = f"dialog_{user_id}"
                 if dialog_key not in st.session_state:
                     st.session_state[dialog_key] = False
-                
-                # Note: Streamlit automatically reruns on button click - this is how Streamlit works
-                # Since we're on a separate page (/Admin_Dashboard), the URL stays the same
                 if st.button("⚙️ Actions", key=f"actions_btn_{user_id}", type="secondary"):
                     st.session_state[dialog_key] = not st.session_state.get(dialog_key, False)
-            
-            # Show popup modal for actions right after this user's row
             if st.session_state.get(dialog_key, False):
-                # Create modal-like popup using container
                 st.markdown("---")
                 with st.container():
                     st.markdown(f"### ⚙️ Actions for {email}")
-                    
-                    # Get current user email to check if this is the logged-in admin
                     current_user_email = st.session_state.get("user_email")
                     is_current_user = current_user_email and email == current_user_email
-                    
-                    # Action selection
                     action_options = ["➕ Add Tokens", "🔑 Reset Password"]
                     if not is_current_user:
                         action_options.append("🗑️ Delete User")
-                    
                     action_key = f"action_{user_id}"
-                    if action_key not in st.session_state:
+                    current_action = st.session_state.get(action_key)
+                    if current_action not in action_options:
                         st.session_state[action_key] = action_options[0]
                     
                     action = st.selectbox(
@@ -121,8 +93,6 @@ def show_admin_tab(urls):
                     )
                     
                     st.divider()
-                    
-                    # Handle selected action
                     if action == "➕ Add Tokens":
                         st.subheader("Add Tokens")
                         credit_card = st.text_input(
@@ -146,15 +116,7 @@ def show_admin_tab(urls):
                                 else:
                                     try:
                                         headers = get_auth_headers()
-                                        response = requests.post(
-                                            f"{API_ADMIN_ADD_TOKENS}/{user_id}/tokens",
-                                            headers=headers,
-                                            json={
-                                                "email": email,
-                                                "credit_card": credit_card,
-                                                "amount": amount
-                                            }
-                                        )
+                                        response = admin_add_tokens(urls, user_id, headers, email, credit_card, amount)
                                         if response.status_code == 200:
                                             st.success(f"✅ Added {amount} tokens to {email}")
                                             st.session_state[dialog_key] = False
@@ -185,14 +147,7 @@ def show_admin_tab(urls):
                                 else:
                                     try:
                                         headers = get_auth_headers()
-                                        response = requests.post(
-                                            f"{API_ADMIN_RESET_PASSWORD}/{user_id}/reset_password",
-                                            headers=headers,
-                                            json={
-                                                "email": email,
-                                                "new_password": new_password
-                                            }
-                                        )
+                                        response = admin_reset_password(urls, user_id, headers, email, new_password)
                                         if response.status_code == 200:
                                             st.success(f"✅ Password reset for {email}")
                                             st.session_state[dialog_key] = False
@@ -209,7 +164,6 @@ def show_admin_tab(urls):
                     
                     elif action == "🗑️ Delete User":
                         st.subheader("Delete User")
-                        # Check if user is trying to delete themselves
                         if is_current_user:
                             st.error("❌ **You cannot delete your own account.**")
                             if st.button("Close", key=f"close_self_delete_{user_id}"):
@@ -222,10 +176,7 @@ def show_admin_tab(urls):
                                 if st.button("Yes, Delete", key=f"yes_{user_id}", type="primary"):
                                     try:
                                         headers = get_auth_headers()
-                                        response = requests.delete(
-                                            f"{API_ADMIN_DELETE_USER}/{user_id}",
-                                            headers=headers
-                                        )
+                                        response = admin_delete_user(urls, user_id, headers)
                                         if response.status_code == 200:
                                             st.success(f"✅ User {email} and all models deleted")
                                             st.session_state[dialog_key] = False

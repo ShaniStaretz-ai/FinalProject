@@ -24,10 +24,6 @@ async def list_users(
     min_tokens: Optional[int] = Query(None, description="Show users with at least X tokens"),
     current_admin: str = Depends(get_current_admin)
 ):
-    """
-    Get all users with optional token filter.
-    Only accessible by admins.
-    """
     logger.info(f"Admin {current_admin} requested user list (min_tokens={min_tokens})")
     users = get_all_users(min_tokens=min_tokens)
     return {
@@ -43,18 +39,11 @@ async def add_tokens(
     payload: AddTokensRequest,
     current_admin: str = Depends(get_current_admin)
 ):
-    """
-    Add tokens to a user's account.
-    Requires email, credit_card (simulated), and amount in request body.
-    Only accessible by admins.
-    """
     email = str(payload.email)
     credit_card = payload.credit_card
     amount = payload.amount
     
     logger.info(f"Admin {current_admin} attempting to add {amount} tokens to user ID {user_id} (email: {email}, credit_card: {credit_card[:4] if len(credit_card) > 4 else '****'}****)")
-    
-    # Verify the email matches the user_id
     user_id_by_email = get_user_id_by_email(email)
     if user_id_by_email is None:
         raise HTTPException(
@@ -89,14 +78,7 @@ async def delete_user_admin(
     user_id: int,
     current_admin: str = Depends(get_current_admin)
 ):
-    """
-    Delete a user and all their trained models.
-    Only accessible by admins.
-    Admins cannot delete themselves.
-    """
     logger.info(f"Admin {current_admin} attempting to delete user ID {user_id}")
-    
-    # Prevent admin from deleting themselves
     current_admin_id = get_user_id_by_email(current_admin)
     if current_admin_id is None:
         raise HTTPException(
@@ -131,14 +113,8 @@ async def reset_user_password(
     payload: UserPasswordUpdateRequest,
     current_admin: str = Depends(get_current_admin)
 ):
-    """
-    Reset a user's password.
-    Only accessible by admins.
-    """
     email = str(payload.email)
     logger.info(f"Admin {current_admin} attempting to reset password for user ID {user_id} (email: {email})")
-    
-    # Verify the email matches the user_id
     user_id_by_email = get_user_id_by_email(email)
     if user_id_by_email is None:
         raise HTTPException(

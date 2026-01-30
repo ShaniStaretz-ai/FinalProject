@@ -1,8 +1,7 @@
 import streamlit as st
-import requests
-import json
 from datetime import datetime
 from auth import is_authenticated, get_auth_headers, logout_and_rerun
+from api import get_trained_models, get_model_details, predict_model, delete_model
 
 
 _MODEL_TYPE_LABELS = {
@@ -14,14 +13,12 @@ _MODEL_TYPE_LABELS = {
 
 
 def _model_display_label(internal_name: str) -> str:
-    """Convert internal name (e.g. 4_knn_20260127_235208_009785) to a short label for the dropdown."""
-    # Format: {user_id}_{model_type}_{YYYYMMDD}_{HHMMSS}_{microseconds}
     parts = internal_name.split("_")
     if len(parts) < 5:
         return internal_name
     try:
-        date_str = parts[-3]  # YYYYMMDD
-        time_str = parts[-2]  # HHMMSS
+        date_str = parts[-3]
+        time_str = parts[-2]
         model_type_raw = "_".join(parts[1:-3])
         model_type = _MODEL_TYPE_LABELS.get(model_type_raw, model_type_raw.replace("_", " ").title())
         dt = datetime(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:8]),
@@ -33,24 +30,15 @@ def _model_display_label(internal_name: str) -> str:
 
 
 def show_predict_tab(urls):
-    API_PREDICT_URL = urls["PREDICT"]
-    API_TRAINED_URL = urls["TRAINED"]
-    API_MODEL_DETAILS_URL = urls["MODEL_DETAILS"]
-    API_DELETE_URL = urls["DELETE_MODEL"]
     st.header("Predict Using a Trained Model")
-
-    # Check authentication
     if not is_authenticated():
         st.warning("⚠️ Please log in to view and use trained models.")
         return
-
-    # Fetch trained models dynamically
     trained_models = []
     try:
         headers = get_auth_headers()
-        response = requests.get(API_TRAINED_URL, headers=headers)
+        response = get_trained_models(urls, headers)
         if response.status_code == 200:
-            # /trained endpoint returns a list directly, not a dict
             trained_models = response.json()
         elif response.status_code == 401:
             logout_and_rerun()
@@ -62,8 +50,6 @@ def show_predict_tab(urls):
     if not trained_models:
         st.info("No trained models available. Please train a model first.")
         return
-
-    # Create two columns: one for model selection, one for delete button
     col1, col2 = st.columns([3, 1])
     
     with col1:
@@ -76,18 +62,13 @@ def show_predict_tab(urls):
         st.caption("Pick the model to use for predictions. Labels show model type and training date.")
     
     with col2:
-        st.write("")  # Spacing
-        st.write("")  # Spacing
+        st.write("")
+        st.write("")
         delete_button = st.button("🗑️ Delete", key="delete_model_btn", type="secondary")
-    
-    # Handle model deletion with confirmation
     if delete_button and model_name:
-        # Store the model to delete in session state for confirmation
         if "model_to_delete" not in st.session_state or st.session_state.model_to_delete != model_name:
             st.session_state.model_to_delete = model_name
             st.session_state.show_delete_confirm = True
-    
-    # Show confirmation dialog if needed
     if st.session_state.get("show_delete_confirm", False) and st.session_state.get("model_to_delete"):
         model_to_delete = st.session_state.model_to_delete
         st.warning(f"⚠️ **Are you sure you want to delete model '{_model_display_label(model_to_delete)}'?**")
@@ -99,16 +80,12 @@ def show_predict_tab(urls):
             if st.button("✅ Yes, Delete", key="confirm_delete", type="primary"):
                 try:
                     headers = get_auth_headers()
-                    response = requests.delete(
-                        f"{API_DELETE_URL}/{model_to_delete}",
-                        headers=headers
-                    )
+                    response = delete_model(urls, model_to_delete, headers)
                     if response.status_code == 200:
                         st.success(f"✅ Model '{_model_display_label(model_to_delete)}' deleted successfully!")
-                        # Clear session state
                         st.session_state.model_to_delete = None
                         st.session_state.show_delete_confirm = False
-                        st.rerun()  # Refresh the page to update the model list
+                        st.rerun()
                     elif response.status_code == 401:
                         logout_and_rerun()
                     elif response.status_code == 404:
@@ -127,16 +104,12 @@ def show_predict_tab(urls):
                 st.session_state.show_delete_confirm = False
                 st.rerun()
 
-    # Fetch model details to get feature columns
     feature_cols = []
     model_details = None
     if model_name:
         try:
             headers = get_auth_headers()
-            response = requests.get(
-                f"{API_MODEL_DETAILS_URL}/{model_name}",
-                headers=headers
-            )
+            response = get_model_details(urls, model_name, headers)
             if response.status_code == 200:
                 model_details = response.json()
                 feature_cols = model_details.get("feature_cols", [])
@@ -145,12 +118,14 @@ def show_predict_tab(urls):
             elif response.status_code == 404:
                 st.error(f"Model '{model_name}' not found or you don't have access to it.")
                 return
+            else:
+                st.error(f"Could not load model details (status {response.status_code}). Please try again.")
+                return
         except Exception as e:
             st.warning(f"Error fetching model details: {e}")
+            return
 
     st.subheader("Input Feature Values")
-    
-    # Add examples expander
     with st.expander("📖 See Examples", expanded=False):
         st.markdown("""
         **Example Prediction Values:**
@@ -193,29 +168,26 @@ def show_predict_tab(urls):
             key = st.text_input(f"Feature {i+1} name", key=f"feat_name_{i}")
             value = st.text_input(f"Feature {i+1} value", key=f"feat_value_{i}")
             if key:
-                try:
-                    value = float(value)
-                except ValueError:
-                    pass
-                features[key] = value
+                if not value or not str(value).strip():
+                    features[key] = None
+                else:
+                    try:
+                        features[key] = float(value)
+                    except ValueError:
+                        features[key] = value
     else:
         st.info(f"Enter values for {len(feature_cols)} feature(s) used during training:")
         features = {}
         for i, col_name in enumerate(feature_cols):
-            # Determine input type based on column name
             col_lower = col_name.lower()
             if "date" in col_lower:
-                # Date input - convert to timestamp
                 date_val = st.date_input(f"{col_name} (date)", key=f"feat_date_{i}")
                 if date_val:
-                    # Convert date to datetime at midnight, then to timestamp
                     dt = datetime.combine(date_val, datetime.min.time())
                     features[col_name] = int(dt.timestamp())
                 else:
                     features[col_name] = 0
             else:
-                # Try numeric input first, fallback to text
-                # Determine if it's likely numeric or categorical based on name
                 col_lower = col_name.lower()
                 if any(keyword in col_lower for keyword in ["age", "salary", "price", "amount", "count", "score", "rate", "percent"]):
                     help_text = f"Enter a number (e.g., 30, 52000, 45.5)"
@@ -231,36 +203,22 @@ def show_predict_tab(urls):
                 )
                 if value:
                     try:
-                        # Try to convert to float
                         features[col_name] = float(value)
                     except ValueError:
-                        # Keep as string for categorical features
                         features[col_name] = value
                 else:
                     features[col_name] = None
 
-    optional_params = {}
-    # Check model_type from model_details instead of model_name
-    # Model names follow format: {user_id}_{model_type}_{timestamp}, so we can't use startswith
-    if model_details and model_details.get("model_type") == "knn":
-        optional_params["n_neighbors"] = st.number_input("n_neighbors (KNN)", 1, 50, 5)
-        optional_params["weights"] = st.selectbox("weights (KNN)", ["uniform", "distance"])
-
     if st.button("Predict"):
-        # Filter out None values
-        features = {k: v for k, v in features.items() if v is not None}
+        features = {k: v for k, v in features.items() if v is not None and v != ""}
         
         if not features:
             st.error("Please provide values for at least one feature")
         else:
-            payload = {"features": features, **optional_params}
+            payload = {"features": features}
             try:
                 headers = get_auth_headers()
-                response = requests.post(
-                    f"{API_PREDICT_URL}/{model_name}",
-                    json=payload,
-                    headers=headers
-                )
+                response = predict_model(urls, model_name, headers, payload)
                 if response.status_code == 200:
                     result = response.json()
                     prediction = result.get("prediction")

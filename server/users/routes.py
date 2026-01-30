@@ -8,21 +8,11 @@ from server.users.repository import create_user, validate_user, delete_user, del
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/user",   # optional: adds /user to all endpoints
-    tags=["users"]
-)
+router = APIRouter(prefix="/user", tags=["users"])
 
 
-# -----------------------------
-# Endpoints
-# -----------------------------
 @router.post("/create")
 async def user_create(payload: UserCreateRequest):
-    """
-    Create a new user account.
-    User must log in separately after account creation.
-    """
     email = str(payload.email)
     logger.info(f"User creation attempt: {email}")
     success = create_user(email, payload.pwd)
@@ -42,9 +32,6 @@ async def user_create(payload: UserCreateRequest):
 
 @router.post("/login")
 async def user_login(payload: UserLoginRequest):
-    """
-    Login endpoint. Accepts email and password, returns JWT token.
-    """
     email = str(payload.email)
     logger.info(f"Login attempt: {email}")
     user = validate_user(email, payload.pwd)
@@ -69,19 +56,12 @@ async def user_delete(
     payload: UserDeleteRequest,
     current_user: str = Depends(get_current_user)
 ):
-    """
-    Delete a user by ID. Requires valid authentication token.
-    Users CANNOT delete their own account - they can only delete other users' accounts.
-    """
-    # Get the authenticated user's ID
     authenticated_user_id = get_user_id_by_email(current_user)
     if authenticated_user_id is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Authenticated user not found"
         )
-    
-    # Prevent users from deleting their own account
     if payload.user_id == authenticated_user_id:
         logger.warning(f"User deletion blocked: {current_user} attempted to delete own account (ID: {payload.user_id})")
         raise HTTPException(
@@ -90,7 +70,6 @@ async def user_delete(
         )
     
     logger.info(f"User deletion request: {current_user} (ID: {authenticated_user_id}) attempting to delete user ID {payload.user_id}")
-    # Delete the requested user (must be different from authenticated user)
     success = delete_user_by_id(payload.user_id)
     if not success:
         logger.warning(f"User deletion failed: User ID {payload.user_id} not found")
@@ -104,11 +83,6 @@ async def user_delete(
 
 @router.get("/tokens")
 async def get_tokens(current_user: str = Depends(get_current_user)):
-    """
-    Get current user's tokens. 
-    Requires authentication token in header (Authorization: Bearer <token>).
-    Returns tokens for the authenticated user only.
-    """
     tokens = get_user_tokens(current_user)
     if tokens is None:
         raise HTTPException(
@@ -119,30 +93,30 @@ async def get_tokens(current_user: str = Depends(get_current_user)):
 
 
 @router.post("/reset_password")
-async def reset_password(payload: UserPasswordUpdateRequest):
-    """
-    Reset a user's password. 
-    This endpoint allows password reset without authentication (for recovery purposes).
-    Use with caution - in production, add email verification or admin-only access.
-    """
+async def reset_password(
+    payload: UserPasswordUpdateRequest,
+    current_user: str = Depends(get_current_user)
+):
     email = str(payload.email)
+    if email.lower() != current_user.lower():
+        logger.warning(f"Password reset denied: {current_user} attempted to reset password for {email}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only reset your own password. Email must match your account."
+        )
     logger.info(f"Password reset attempt for: {email}")
-    
-    # Check if user exists by trying to get user ID
-    user_id = get_user_id_by_email(email)
+    user_id = get_user_id_by_email(current_user)
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
     success = update_user_password(email, payload.new_password)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update password"
         )
-    
     logger.info(f"Password reset successful for: {email}")
     return {
         "status": "success",
