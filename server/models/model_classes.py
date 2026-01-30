@@ -1,9 +1,13 @@
 from server.models.knn_model import KNNModel
 from server.models.linear_regression_model import LinearRegressionModel
+from server.models.logistic_model import LogisticModel
+from server.models.random_forest_model import RandomForestModel
 
 MODEL_CLASSES = {
     "knn": KNNModel,
     "linear": LinearRegressionModel,
+    "logistic": LogisticModel,
+    "random_forest": RandomForestModel,
 }
 
 def get_model_class(model_name: str):

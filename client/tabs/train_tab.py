@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
-from auth import is_authenticated, get_auth_headers
+from auth import is_authenticated, get_auth_headers, logout_and_rerun
 
 def show_train_tab(urls):
     API_CREATE_URL = urls["CREATE"]
@@ -54,12 +54,23 @@ def show_train_tab(urls):
     st.subheader("Optional Parameters")
 
     optional_params = {}
-    # Fallback: basic types
+    # Fallback: basic types (when API not available)
     default_model_params = {
         "linear": {"fit_intercept": {"type": "bool"}},
         "knn": {
             "n_neighbors": {"type": "int"},
             "weights": {"type": "select", "options": ["uniform", "distance"]}
+        },
+        "logistic": {
+            "C": {"type": "float", "label": "C (inverse of regularization strength; smaller = stronger regularization)", "value": 1.0},
+            "max_iter": {"type": "int", "label": "max_iter (maximum number of iterations for the solver to converge)", "value": 100},
+            "solver": {"type": "str", "label": "solver (algorithm: lbfgs, liblinear, newton-cg, sag, or saga)", "value": "lbfgs"},
+        },
+        "random_forest": {
+            "n_estimators": {"type": "int"},
+            "max_depth": {"type": "int"},
+            "min_samples_split": {"type": "int"},
+            "min_samples_leaf": {"type": "int"},
         }
     }
 
@@ -67,19 +78,21 @@ def show_train_tab(urls):
 
     for param, param_config in params_config.items():
         param_type = param_config.get("type", "str")
+        label = param_config.get("label", param)
 
+        default_val = param_config.get("value")
         match param_type:
             case "int":
-                optional_params[param] = st.number_input(param, value=5)
+                optional_params[param] = st.number_input(label, value=default_val if default_val is not None else 5, key=f"opt_{model_type}_{param}")
             case "float":
-                optional_params[param] = st.number_input(param, value=0.8)
+                optional_params[param] = st.number_input(label, value=default_val if default_val is not None else 0.8, key=f"opt_{model_type}_{param}")
             case "bool":
-                optional_params[param] = st.checkbox(param, value=True)
+                optional_params[param] = st.checkbox(label, value=default_val if default_val is not None else True, key=f"opt_{model_type}_{param}")
             case "str":
-                optional_params[param] = st.text_input(param)
+                optional_params[param] = st.text_input(label, value=default_val or "", key=f"opt_{model_type}_{param}")
             case "select":
                 options = param_config.get("options", [])
-                optional_params[param] = st.selectbox(param, options)
+                optional_params[param] = st.selectbox(label, options, key=f"opt_{model_type}_{param}")
             case _:
                 st.warning(f"Unknown parameter type '{param_type}' for {param}")
 
@@ -117,6 +130,6 @@ def show_train_tab(urls):
                 if tokens_deducted:
                     st.info(f"Tokens deducted: {tokens_deducted}")
             elif response.status_code == 401:
-                st.error("Authentication failed. Please log in again.")
+                logout_and_rerun()
             else:
                 st.error(f"Training failed: {response.text}")

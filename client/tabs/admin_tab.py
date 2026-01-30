@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from auth import is_authenticated, get_auth_headers, is_admin
+from auth import is_authenticated, get_auth_headers, is_admin, logout_and_rerun
 from config import DEFAULT_API_BASE_URL
 
 def show_admin_tab(urls):
@@ -45,6 +45,8 @@ def show_admin_tab(urls):
         if response.status_code == 200:
             data = response.json()
             users = data.get("users", [])
+        elif response.status_code == 401:
+            logout_and_rerun()
         elif response.status_code == 403:
             st.error("❌ Access Denied: Admin privileges required.")
             return
@@ -157,6 +159,8 @@ def show_admin_tab(urls):
                                             st.success(f"✅ Added {amount} tokens to {email}")
                                             st.session_state[dialog_key] = False
                                             st.rerun()
+                                        elif response.status_code == 401:
+                                            logout_and_rerun()
                                         else:
                                             st.error(f"❌ Failed: {response.json().get('detail', response.text)}")
                                     except Exception as e:
@@ -193,6 +197,8 @@ def show_admin_tab(urls):
                                             st.success(f"✅ Password reset for {email}")
                                             st.session_state[dialog_key] = False
                                             st.rerun()
+                                        elif response.status_code == 401:
+                                            logout_and_rerun()
                                         else:
                                             st.error(f"❌ Failed: {response.json().get('detail', response.text)}")
                                     except Exception as e:
@@ -224,6 +230,8 @@ def show_admin_tab(urls):
                                             st.success(f"✅ User {email} and all models deleted")
                                             st.session_state[dialog_key] = False
                                             st.rerun()
+                                        elif response.status_code == 401:
+                                            logout_and_rerun()
                                         elif response.status_code == 403:
                                             st.error("❌ You cannot delete your own account.")
                                             st.session_state[dialog_key] = False

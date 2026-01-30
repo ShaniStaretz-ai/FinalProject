@@ -181,6 +181,15 @@ def logout():
         pass
 
 
+def logout_and_rerun():
+    """
+    Clear auth state and rerun the app so the UI shows logged out.
+    Call this when the API returns 401 (e.g. token expired).
+    """
+    logout()
+    st.rerun()
+
+
 def reset_password(email: str, new_password: str, api_base_url: str) -> Tuple[bool, str]:
     """
     Reset a user's password.
@@ -232,6 +241,8 @@ def get_user_tokens(api_base_url: str) -> Optional[int]:
         if response.status_code == 200:
             data = response.json()
             return data.get("tokens")
+        if response.status_code == 401:
+            logout_and_rerun()
         return None
     except Exception:
         return None
@@ -256,6 +267,8 @@ def is_admin(api_base_url: str) -> bool:
             f"{api_base_url}/admin/users",
             headers=headers
         )
+        if response.status_code == 401:
+            logout_and_rerun()
         return response.status_code == 200
     except Exception:
         return False

@@ -2,7 +2,35 @@ import streamlit as st
 import requests
 import json
 from datetime import datetime
-from auth import is_authenticated, get_auth_headers
+from auth import is_authenticated, get_auth_headers, logout_and_rerun
+
+
+_MODEL_TYPE_LABELS = {
+    "knn": "KNN",
+    "linear": "Linear",
+    "logistic": "Logistic",
+    "random_forest": "Random Forest",
+}
+
+
+def _model_display_label(internal_name: str) -> str:
+    """Convert internal name (e.g. 4_knn_20260127_235208_009785) to a short label for the dropdown."""
+    # Format: {user_id}_{model_type}_{YYYYMMDD}_{HHMMSS}_{microseconds}
+    parts = internal_name.split("_")
+    if len(parts) < 5:
+        return internal_name
+    try:
+        date_str = parts[-3]  # YYYYMMDD
+        time_str = parts[-2]  # HHMMSS
+        model_type_raw = "_".join(parts[1:-3])
+        model_type = _MODEL_TYPE_LABELS.get(model_type_raw, model_type_raw.replace("_", " ").title())
+        dt = datetime(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:8]),
+                      int(time_str[:2]), int(time_str[2:4]), int(time_str[4:6]))
+        friendly_date = dt.strftime("%b %d, %Y · %H:%M")
+        return f"{model_type} — {friendly_date}"
+    except (ValueError, IndexError):
+        return internal_name
+
 
 def show_predict_tab(urls):
     API_PREDICT_URL = urls["PREDICT"]
@@ -25,8 +53,7 @@ def show_predict_tab(urls):
             # /trained endpoint returns a list directly, not a dict
             trained_models = response.json()
         elif response.status_code == 401:
-            st.error("Authentication failed. Please log in again.")
-            return
+            logout_and_rerun()
         else:
             st.warning(f"Could not fetch trained models: {response.text}")
     except Exception as e:
@@ -40,7 +67,13 @@ def show_predict_tab(urls):
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        model_name = st.selectbox("Select a trained model", trained_models)
+        model_name = st.selectbox(
+            "Select a trained model",
+            trained_models,
+            format_func=_model_display_label,
+            help="Choose a model you previously trained. Each option shows the model type (e.g. KNN, Linear) and when it was trained.",
+        )
+        st.caption("Pick the model to use for predictions. Labels show model type and training date.")
     
     with col2:
         st.write("")  # Spacing
@@ -57,7 +90,7 @@ def show_predict_tab(urls):
     # Show confirmation dialog if needed
     if st.session_state.get("show_delete_confirm", False) and st.session_state.get("model_to_delete"):
         model_to_delete = st.session_state.model_to_delete
-        st.warning(f"⚠️ **Are you sure you want to delete model '{model_to_delete}'?**")
+        st.warning(f"⚠️ **Are you sure you want to delete model '{_model_display_label(model_to_delete)}'?**")
         st.warning("This action cannot be undone. The model file and database record will be permanently deleted.")
         
         col_confirm, col_cancel = st.columns(2)
@@ -71,14 +104,13 @@ def show_predict_tab(urls):
                         headers=headers
                     )
                     if response.status_code == 200:
-                        st.success(f"✅ Model '{model_to_delete}' deleted successfully!")
+                        st.success(f"✅ Model '{_model_display_label(model_to_delete)}' deleted successfully!")
                         # Clear session state
                         st.session_state.model_to_delete = None
                         st.session_state.show_delete_confirm = False
                         st.rerun()  # Refresh the page to update the model list
                     elif response.status_code == 401:
-                        st.error("Authentication failed. Please log in again.")
-                        st.session_state.show_delete_confirm = False
+                        logout_and_rerun()
                     elif response.status_code == 404:
                         st.error(f"Model '{model_to_delete}' not found or you don't have access to it.")
                         st.session_state.show_delete_confirm = False
@@ -108,6 +140,8 @@ def show_predict_tab(urls):
             if response.status_code == 200:
                 model_details = response.json()
                 feature_cols = model_details.get("feature_cols", [])
+            elif response.status_code == 401:
+                logout_and_rerun()
             elif response.status_code == 404:
                 st.error(f"Model '{model_name}' not found or you don't have access to it.")
                 return
@@ -235,7 +269,7 @@ def show_predict_tab(urls):
                     if tokens_deducted:
                         st.info(f"Tokens deducted: {tokens_deducted}")
                 elif response.status_code == 401:
-                    st.error("Authentication failed. Please log in again.")
+                    logout_and_rerun()
                 else:
                     st.error(f"❌ Prediction failed: {response.text}")
             except Exception as e:
