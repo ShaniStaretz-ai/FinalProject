@@ -13,15 +13,12 @@ def show_admin_tab(urls, api_base_url: str):
         return
     
     st.success("✅ Admin access granted")
-    st.subheader("Filter Users")
-    min_tokens = st.slider(
-        "Show users with at least X tokens",
-        min_value=0,
-        max_value=1000,
-        value=0,
-        step=1,
-        help="Set to 0 to show all users"
-    )
+    if st.session_state.get("admin_action_success"):
+        st.success(f"✅ **Action completed:** {st.session_state.admin_action_success}")
+        del st.session_state["admin_action_success"]
+    if "admin_min_tokens" not in st.session_state:
+        st.session_state["admin_min_tokens"] = 0
+    min_tokens = st.session_state["admin_min_tokens"]
     users = []
     try:
         headers = get_auth_headers()
@@ -118,7 +115,7 @@ def show_admin_tab(urls, api_base_url: str):
                                         headers = get_auth_headers()
                                         response = admin_add_tokens(urls, user_id, headers, email, credit_card, amount)
                                         if response.status_code == 200:
-                                            st.success(f"✅ Added {amount} tokens to {email}")
+                                            st.session_state["admin_action_success"] = f"Added {amount} tokens to {email}."
                                             st.session_state[dialog_key] = False
                                             st.rerun()
                                         elif response.status_code == 401:
@@ -149,7 +146,7 @@ def show_admin_tab(urls, api_base_url: str):
                                         headers = get_auth_headers()
                                         response = admin_reset_password(urls, user_id, headers, email, new_password)
                                         if response.status_code == 200:
-                                            st.success(f"✅ Password reset for {email}")
+                                            st.session_state["admin_action_success"] = f"Password reset for {email}."
                                             st.session_state[dialog_key] = False
                                             st.rerun()
                                         elif response.status_code == 401:
@@ -178,7 +175,7 @@ def show_admin_tab(urls, api_base_url: str):
                                         headers = get_auth_headers()
                                         response = admin_delete_user(urls, user_id, headers)
                                         if response.status_code == 200:
-                                            st.success(f"✅ User {email} and all models deleted")
+                                            st.session_state["admin_action_success"] = f"User {email} and all models deleted."
                                             st.session_state[dialog_key] = False
                                             st.rerun()
                                         elif response.status_code == 401:
@@ -199,4 +196,14 @@ def show_admin_tab(urls, api_base_url: str):
                 st.markdown("---")
             
             st.divider()
+
+    st.subheader("Filter Users")
+    st.slider(
+        "Show users with at least X tokens",
+        min_value=0,
+        max_value=1000,
+        step=1,
+        key="admin_min_tokens",
+        help="Set to 0 to show all users"
+    )
 
