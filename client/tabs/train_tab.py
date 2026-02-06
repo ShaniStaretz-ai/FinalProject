@@ -94,6 +94,16 @@ def show_train_tab(urls):
         if not feature_cols or not label_col:
             st.error("Please select feature and label columns.")
         else:
+            # Client-side validation of missing data before sending to server
+            if df[label_col].isna().any():
+                st.error(f"Label column '{label_col}' contains missing values. Please clean the CSV (or remove rows with empty labels) before training.")
+                return
+            feature_na = df[feature_cols].isna().any()
+            cols_with_na = [col for col, has_na in feature_na.items() if has_na]
+            if cols_with_na:
+                st.error(f"Feature column(s) {cols_with_na} contain missing values. Please clean or impute them before training.")
+                return
+
             uploaded_file.seek(0)
             files = {"csv_file": (uploaded_file.name, uploaded_file, "text/csv")}
             data = {

@@ -124,7 +124,7 @@ FinalProject/
    - Install PostgreSQL and create a database.
    - Note host, port, database name, user, and password.
 
-5. **Create `.env` in project root**
+5. **Create `.env` in project root** (copy from `.env.example` and fill in values)
    ```env
    DB_HOST=localhost
    DB_PORT=5432
@@ -253,6 +253,24 @@ Model names: auto `{user_id}_{model_type}_{timestamp}` or custom; feature column
 - **Working application:** Server + client run as described; full auth, train, predict, and admin flows.
 - **Documentation:** This README (setup, run, API, env, security).
 - **Codebase:** Structured server and client with ML pipeline, DB, and security integrated.
+
+---
+
+## Demo / Presentation (AI Development Course)
+
+**Suggested flow for a live demo or video:**
+
+1. **Setup:** Show `.env.example` → copy to `.env`, set DB and `JWT_SECRET`; start server, then client.
+2. **Auth:** Register a user → log in → show token balance in sidebar.
+3. **Train:** Upload a CSV from `data/` (e.g. `user_decision_classification.csv`), pick features and label, choose a model type (e.g. KNN or Random Forest), train → show R², MSE, MAE.
+4. **Predict:** Select the trained model, fill feature values → run prediction → show result and tokens deducted.
+5. **Admin (if admin user):** Log in as admin (from `ADMIN_EMAIL`/`ADMIN_PASSWORD`), open Admin Dashboard → list users, add tokens or reset password for a user.
+
+**Checklist before submission:**  
+- [ ] PostgreSQL running; `.env` created from `.env.example`.  
+- [ ] Server starts (`uvicorn server.main:app --reload --host 127.0.0.1 --port 8000`).  
+- [ ] Client starts (`streamlit run client/app.py`).  
+- [ ] Register, train, predict, and (optional) admin flows work end-to-end.
 
 ---
 

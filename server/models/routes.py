@@ -157,6 +157,21 @@ async def create_model(
     missing_cols = [c for c in feature_cols_list + [label_col] if c not in df.columns]
     if missing_cols:
         raise HTTPException(status_code=400, detail=f"Columns not found in CSV: {missing_cols}")
+
+    # Validate data: no missing values in label column or selected feature columns
+    if df[label_col].isna().any():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Label column '{label_col}' contains missing values. Please clean your data before training."
+        )
+    feature_na = df[feature_cols_list].isna().any()
+    cols_with_na = [col for col, has_na in feature_na.items() if has_na]
+    if cols_with_na:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Feature column(s) {cols_with_na} contain missing values. Please clean or impute them before training."
+        )
+
     if model_type not in MODEL_CLASSES:
         raise HTTPException(status_code=400, detail=f"Model type '{model_type}' not recognized")
 
